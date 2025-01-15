@@ -45,6 +45,12 @@ export class Playlist {
     return this.currentStream?.liveEdge
   }
 
+  set liveEdge (end) {
+    if (this.currentStream) {
+      this.currentStream.liveEdge = end
+    }
+  }
+
   get totalDuration () {
     return this.currentStream?.totalDuration || 0
   }
@@ -102,6 +108,14 @@ export class Playlist {
     this._segmentPointer = index - 1
   }
 
+  setNextSegmentBySN (sn = 0) {
+    const preIndex = this.currentSegments?.findIndex(x => x.sn === sn)
+    if (preIndex !== -1) {
+      this.setNextSegmentByIndex(preIndex + 1)
+    }
+    return preIndex
+  }
+
   findSegmentIndexByTime (time) {
     const segments = this.currentSegments
     if (segments) {
@@ -113,7 +127,7 @@ export class Playlist {
       }
 
       const lastSegment = segments[segments.length - 1]
-      if (Math.abs(time - lastSegment.end) < 0.2) return segments.length - 1
+      if (Math.abs(time - lastSegment?.end) < 0.2) return segments.length - 1
     }
   }
 
@@ -158,11 +172,19 @@ export class Playlist {
     }
   }
 
+  updateSegmentsRanges (sn, start) {
+    const segs = this.currentSegments?.filter(x => x.sn >= sn)
+    segs.forEach(s => {
+      s.start = start
+      start = s.end
+    })
+  }
+
   switchSubtitle (lang) {
     this.currentStream?.switchSubtitle(lang)
   }
 
-  clearOldSegment (maxPlaylistSize = 50) {
+  clearOldSegment (maxPlaylistSize = (this.hls.config.maxPlaylistSize || 50)) {
     const stream = this.currentStream
     if (!this.dvrWindow || !stream) return
     const startTime = stream.endTime - this.dvrWindow
@@ -194,7 +216,18 @@ export class Playlist {
     if (!next.hasAudio && !next.hasVideo) return
 
     if ((next.hasAudio !== seg.hasAudio || next.hasVideo !== seg.hasVideo)) return next
+  }
 
+  feedbackLiveEdge (segment, bufferEnd) {
+    const segs = this.currentSegments
+    if (!segs) return
+    const isLast = this.lastSegment?.sn === segment.sn
+    if (isLast) {
+      this.liveEdge = bufferEnd
+      return
+    }
+
+    this.updateSegmentsRanges(segment.sn + 1, bufferEnd)
   }
 
 }

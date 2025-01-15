@@ -115,7 +115,11 @@ class Controls extends Plugin {
     Util.removeClass(this.root, STATE_CLASS.CONTROLS_AUTOHIDE)
   }
 
-  show () {
+  /**
+   * @param {string} [value]
+   * @returns
+   */
+  show (value) {
     this.root.style.display = ''
     this.player.focus()
   }
@@ -170,6 +174,10 @@ class Controls extends Plugin {
       this.unbind('mouseenter', this.onMouseEnter)
       this.unbind('mouseleave', this.onMouseLeave)
     }
+    this.left = null
+    this.center = null
+    this.right = null
+    this.innerRoot = null
   }
 
   render () {

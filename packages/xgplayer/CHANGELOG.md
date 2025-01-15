@@ -1,4 +1,57 @@
 # 版本更新记录
+## 3.0.21
+>* fix: 🐛 (xgplayer) 修复播放器seeked时，播放器未启动播放而弹幕自动播放问题
+>* fix player destroy  control plugins memeory leak
+>* fix: 🐛 (xgplayer) 修复全屏hook，执行报错的问题 close#1579
+>* refactor: 💡 (xgplayer) preProcessUrl API 对外使用
+## 3.0.20
+>* fix: 🐛 (xgplayer)多个播放器，只显示一个rotate icon
+>* fix: 🐛 (xgplayer)修复mobile插件部分手机场景功能失效问题修复
+>* fix: 🐛 (xgplayer) 修复播放器销毁时，ResizeObserver报错的问题
+## 3.0.19
+>* fix: 🐛 (xgplayer) 修复弹幕插件在无controls时，初始化报错问题
+>* fix(xgplayer): android hls origin video play's startTime
+>* chore: (xgplayer) remove duplicate codec item for MP4 support check
+>* fix(xgplayer): apply mobile plugin's darkness config
+>* fix: (xgplayer) exitFullscreen without el set
+## 3.0.18
+>* fix: 🐛 (xgplayer) 修复弹幕在自定义el元素内容时，文字样式折行的问题
+>* fix: 🐛 (xgplayer) 修复音量展示和时机数值有差异的问题 #1396
+>* fix: 🐛 (xgplayer) 修复截图在部分机型失败的问题
+>* feat: (xgplayer) 增加preProcessUrlOptions参数
+>* fix: 🐛(xgplayer) 修复pad端列表按钮交互异常问题
+>* fix: 🐛(xgplayer) 修复pad端进度条拖动异常问题
+>* fix: 🐛(xgplayer) onTimeupdate中AUTOPLAY_STARTED的触发增加判断为this.state === STATES.NOTALLOW;
+>* fix: 🐛(xgplayer)  startTime处理放在onLoadedData中,修复ios中在durationchange修改currentTime之后timeupdate不触发问题
+>* feat(xgplayer): progress 最小宽度限制修改
+## 3.0.17
+>* fix: 🐛 (xgplayer) 修复音量展示和实际数值不符的问题
+## 3.0.14
+>* feat(xgplayer): 🎸 当系统支持屏幕方向锁定时，全屏后自动横屏
+## 3.0.13
+>* feat(xgplayer): 提供更多语言的国际化文案资源
+>* refactor(xgplayer): 支持播放插件控制media source
+## 3.0.12
+>* fix(xgplayer): PIP插件支持文档画中画能力 [Document Picture-in-Picture](https://wicg.github.io/document-picture-in-picture/)
+## 3.0.11
+>* fix(xgplayer): 修复android端播放hls起播时长设置异常问题
+>* fix(xgplayer): 1. fix progress dot position 2. add mediaSrc attribute when report error
+>* fix(xgplayer): rset progress btn position when playnext
+>* fix(xgplayer): resizePosition在rotate为-1时兼容
+>* fix(xgplayer): 修复 sniffer 在部分 iPad 中判断错误的问题
+>* fix(xgplayer): enableContextmenu配置和文档相反问题修复 close https://github.com/bytedance/xgplayer/issues/1232
+>* fix(xgplayer): 修复seek状态下切换播放源时间不更新问题
+>* feat(xgplayer): 带列表的按钮增加高度控制
+>* fix(xgplayer): progresspreview插件transformTime 不生效问题修复
+>* fix(xgplayer): 累计观看时长计时点从onPlaying开始
+>* fix(xgplayer): miniprogress增加颜色配置响应 close https://github.com/bytedance/xgplayer/issues/1179
+>* fix(xgplayer): 全局多实例快捷键同时生效异常问题修复
+## 3.0.11-alpha.0
+>* fix(xgplayer): isBlob判断增加类型判断
+>* feat(xgplayer): dynamicBg插件增加自定义容器渲染, 增加初始渲染间隔
+>* fix(xgplayer): api类型声明修复 close https://github.com/bytedance/xgplayer/issues/1142
+>* fix(xgplayer): api类型声明修复 close https://github.com/bytedance/xgplayer/issues/1142
+>* feat(xgplayer): poster增加填充模式
 ## 3.0.10
 >* fix(xgplayer): 播放器销毁mobile插件事件解绑不全问题修复
 >* fix(xgplayer): 初始videoPo.rotate修改为-1
@@ -8,7 +61,9 @@
 >* fix(xgplayer): 修复timeupdate中获取cumulateTime计算异常问题
 >* fix(xgplayer): texttrack修复不能更新字幕
 >* fix(xgplayer): 🐛 修复移动浏览器下muted未显示设置在dom内，会导致非静音切换频地
-址后开播失败的问题
+>* fix(xgplayer): 🐛 修复全屏和旋转插件对于镜像插件的影响
+>* fix(xgplayer): 修复进度条预览首次移动进入显示异常问题
+>* feat(xgplayer): 增加preProcessUrl配置用于url的前置处理
 ## 3.0.9
 >* fix(xgplayer):修复sourceList播放类型下safari第一个source节点不触发error导致整体error不触发问题
 >* feat(xgplayer): player.focus API增加控制了栏锁定模式

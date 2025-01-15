@@ -1,10 +1,10 @@
 import { MediaPlaylist, MediaSegment, MediaSegmentKey } from './model'
-import { getAbsoluteUrl, parseAttr, parseTag } from './utils'
+import { getAbsoluteUrl, parseAttr, parseTag, isValidDaterange } from './utils'
 
 export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
   const media = new MediaPlaylist()
   media.url = parentUrl
-  let curSegment = new MediaSegment()
+  let curSegment = new MediaSegment(parentUrl)
   let curInitSegment = null
   let curKey = null
   let totalDuration = 0
@@ -18,9 +18,6 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
 
   // eslint-disable-next-line no-cond-assign
   while (line = lines[index++]) {
-    if (endOfList) {
-      break
-    }
     if (line[0] !== '#') { // url
       if (media.lowLatency) {
         curSN++
@@ -33,7 +30,7 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
       if (curKey) curSegment.key = curKey.clone(curSN)
       if (curInitSegment) curSegment.initSegment = curInitSegment
       media.segments.push(curSegment)
-      curSegment = new MediaSegment()
+      curSegment = new MediaSegment(parentUrl)
       curSN++
       continue
     }
@@ -66,15 +63,10 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
         media.canBlockReload = attr['CAN-BLOCK-RELOAD'] === 'YES'
         media.partHoldBack = parseFloat(attr['PART-HOLD-BACK'] || 0)
         media.canSkipUntil = parseFloat(attr['CAN-SKIP-UNTIL'] || 0)
-        media.canSkipDateRanges = attr['CAN-SKIP-DATERANGES'] === 'YES'
+        media.canSkipDateRanges = media.canSkipUntil > 0 && (attr['CAN-SKIP-DATERANGES'] === 'YES')
       }
         break
       case 'ENDLIST': {
-        const lastSegment = media.segments[media.segments.length - 1]
-        if (lastSegment) {
-          lastSegment.isLast = true
-        }
-        media.live = false
         endOfList = true
       }
         break
@@ -105,12 +97,23 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
         if (curKey) curSegment.key = curKey.clone(curSN)
         if (curInitSegment) curSegment.initSegment = curInitSegment
         media.segments.push(curSegment)
-        curSegment = new MediaSegment()
+        curSegment = new MediaSegment(parentUrl)
         partSegmentIndex++
       }
 
         break
-      case 'PRELOAD-HINT':
+      case 'PRELOAD-HINT': {
+        const attr = parseAttr(data)
+        media.preloadHint = attr
+        if (attr['TYPE'] === 'PART' && attr['URI']) {
+          const tmp = attr['URI'].split('.ts')[0].split('-')
+          media.nextSN = tmp[3]
+          media.nextIndex = tmp[tmp.length - 1]
+        }
+      }
+        break
+      case 'PROGRAM-DATE-TIME':
+        curSegment.dataTime = data
         break
       case 'EXTINF': {
         if (media.lowLatency) {
@@ -130,12 +133,14 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
           curKey = null
           break
         }
-        if (attr.METHOD !== 'AES-128') throw new Error(`encrypt ${attr.METHOD}/${attr.KEYFORMAT} is not supported`)
         curKey = new MediaSegmentKey()
         curKey.method = attr.METHOD
         curKey.url = /^blob:/.test(attr.URI) ? attr.URI : getAbsoluteUrl(attr.URI, parentUrl)
         curKey.keyFormat = attr.KEYFORMAT || 'identity'
         curKey.keyFormatVersions = attr.KEYFORMATVERSIONS
+        if (!curKey.isSupported()) {
+          throw new Error(`encrypt ${attr.METHOD}/${attr.KEYFORMAT} is not supported`)
+        }
         if (attr.IV) {
           let str = attr.IV.slice(2)
           str = (str.length & 1 ? '0' : '') + str
@@ -156,7 +161,29 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
           curSegment.key = curKey.clone(0)
         }
         curInitSegment = curSegment
-        curSegment = new MediaSegment()
+        curSegment = new MediaSegment(parentUrl)
+      }
+        break
+      case 'SKIP': {
+        const attr = parseAttr(data)
+        const skippedSegments = parseInt(attr['SKIPPED-SEGMENTS'], 10)
+        if (skippedSegments <= Number.MAX_SAFE_INTEGER) {
+          media.skippedSegments += skippedSegments
+          curSN += skippedSegments
+        }
+      }
+        break
+      case 'DATERANGE': {
+        const attr = parseAttr(data)
+        const dateRangeWithSameId = media.dateRanges[attr.ID]
+        attr._startDate = dateRangeWithSameId ? dateRangeWithSameId._startDate : new Date(attr['START-DATE'])
+        const endDate = dateRangeWithSameId?._endDate || new Date(attr.END_DATE)
+        if (Number.isFinite(endDate)) {
+          attr._endDate = endDate
+        }
+        if (isValidDaterange(attr, dateRangeWithSameId) || media.skippedSegments) {
+          media.dateRanges[attr.ID] = attr
+        }
       }
         break
       default:
@@ -164,13 +191,18 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
   }
 
   media.segments = media.segments.filter(x => x.duration !== 0)
-
   const lastSegment = media.segments[media.segments.length - 1]
+
   if (lastSegment) {
+    if (endOfList) {
+      lastSegment.isLast = true
+    }
     media.endSN = lastSegment.sn
     media.endPartIndex = lastSegment.partIndex
   }
-
+  if (endOfList) {
+    media.live = false
+  }
   media.totalDuration = totalDuration
   media.endCC = curCC
 

@@ -5,7 +5,8 @@ import OptionList from './optionList'
 
 const LIST_TYPES = {
   SIDE: 'side',
-  MIDDLE: 'middle'
+  MIDDLE: 'middle',
+  DEFAULT: 'default'
 }
 
 const TOGGLE_MODES = {
@@ -32,7 +33,7 @@ function getListClassName (listType, position) {
  * }} IOptionsIconConfig
  */
 
-const IS_MOBILE = Sniffer.device === 'mobile'
+let IS_MOBILE = Sniffer.device === 'mobile'
 
 export default class OptionsIcon extends Plugin {
   static get pluginName () {
@@ -47,12 +48,13 @@ export default class OptionsIcon extends Plugin {
       position: POSITIONS.CONTROLS_RIGHT,
       index: 100,
       list: [],
-      listType: 'middle', // 模式 side-右侧边栏  middle-中间显示
+      listType: 'default', // 模式 side-右侧边栏  middle-中间显示
       listStyle: {},
       hidePortrait: true,
       isShowIcon: false,
       isItemClickHide: true, // 列表点击之后是否隐藏列表
-      toggleMode: TOGGLE_MODES.HOVER // 激活状态切换模式
+      toggleMode: TOGGLE_MODES.HOVER, // 激活状态切换模式
+      heightLimit: true
     }
   }
 
@@ -71,7 +73,8 @@ export default class OptionsIcon extends Plugin {
   afterCreate () {
     const { config } = this
     this.initIcons()
-    if (IS_MOBILE && config.listType !== LIST_TYPES.MIDDLE) {
+    IS_MOBILE = IS_MOBILE || this.domEventType === 'touch'
+    if (IS_MOBILE && Sniffer.device === 'mobile' && config.listType === LIST_TYPES.DEFAULT) {
       config.listType = LIST_TYPES.SIDE
     }
 
@@ -130,7 +133,11 @@ export default class OptionsIcon extends Plugin {
     Util.addClass(this.find('.xgplayer-icon'), 'btn-text')
   }
 
-  show () {
+  /**
+   * @param {string} [value]
+   * @returns
+   */
+  show (value) {
     if (!this.config.list || this.config.list.length < 2) {
       return
     }
@@ -202,7 +209,7 @@ export default class OptionsIcon extends Plugin {
 
   // 状态切换
   toggle (isActive) {
-    if (isActive === this.isActive) return
+    if (isActive === this.isActive || this.config.disable) return
     const { controls } = this.player
     const { listType } = this.config
     if (isActive) {
@@ -260,7 +267,8 @@ export default class OptionsIcon extends Plugin {
         className: getListClassName(config.listType, config.position), // config.listType === LIST_TYPES.SIDE ? 'xg-right-side' : '',
         onItemClick: (e, data) => {
           this.onItemClick(e, data)
-        }
+        },
+        domEventType: IS_MOBILE ? 'touch' : 'mouse'
       },
       root: config.listType === LIST_TYPES.SIDE ? (player.innerContainer || player.root) : this.root
     }
@@ -268,7 +276,7 @@ export default class OptionsIcon extends Plugin {
     if (this.config.isShowIcon) {
       const { height } = this.player.root.getBoundingClientRect()
       const _maxH = config.listType === LIST_TYPES.MIDDLE ? height - 50 : height
-      if (_maxH) {
+      if (_maxH && config.heightLimit) {
         options.config.maxHeight = `${_maxH}px`
       }
       this.optionsList = new OptionList(options)
@@ -279,6 +287,9 @@ export default class OptionsIcon extends Plugin {
   }
 
   _resizeList () {
+    if (!this.config.heightLimit) {
+      return
+    }
     const { height } = this.player.root.getBoundingClientRect()
     const _maxH = this.config.listType === LIST_TYPES.MIDDLE ? height - 50 : height
     this.optionsList && this.optionsList.setStyle({ maxHeight: `${_maxH}px` })

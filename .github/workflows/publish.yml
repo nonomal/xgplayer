@@ -41,7 +41,7 @@ jobs:
       - name: setup global dependencies
         run: |
           npm install yarn -g 
-          npm install zx -g
+          npm install zx@7.2.3 -g
 
       - name: install repo dependencies
         run: |
@@ -98,14 +98,14 @@ jobs:
               ${{ runner.os }}-
         - name: setup git
           run: |
-            git config --global user.name 'leonardoFu'
-            git config --global user.email 'leonardoFu@users.noreply.github.com'
+            git config --global user.name ${{ github.actor }}
+            git config --global user.email ${{ github.actor }}@users.noreply.github.com
             git fetch --tags
             git pull
         - name: setup global deps
           run: |
             npm install yarn -g 
-            npm install zx -g
+            npm install zx@7.2.3 -g
             
         - name: install repo deps
           run: |

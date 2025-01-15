@@ -22,7 +22,7 @@
  *  },
  *  isWeixin: boolean,
  *  isSupportMP4(): ICheckResult,
- *  isHevcSupported(): boolean
+ *  isHevcSupported(): boolean,
  *  probeConfigSupported(info: MediaDecodingConfiguration): Promise<MediaCapabilitiesDecodingInfo>
  * }} ISniffer
  */
@@ -39,10 +39,6 @@ const H264_MIMETYPES = [
   'avc1.64001E, mp4a.40.2',
   'avc1.42E01E',
   'mp4v.20.8',
-  'avc1.42E01E, mp4a.40.2',
-  'avc1.58A01E, mp4a.40.2',
-  'avc1.4D401E, mp4a.40.2',
-  'avc1.64001E, mp4a.40.2',
   'mp4v.20.8, mp4a.40.2',
   'mp4v.20.240, mp4a.40.2'
 ]
@@ -79,13 +75,13 @@ const sniffer = {
     const isSymbian = /(?:SymbianOS)/.test(ua) || isWindowsPhone
     const isAndroid = /(?:Android)/.test(ua)
     const isFireFox = /(?:Firefox)/.test(ua)
+    const isIpad = /(?:iPad|PlayBook)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
     const isTablet =
-      /(?:iPad|PlayBook)/.test(ua) ||
+      isIpad ||
       (isAndroid && !/(?:Mobile)/.test(ua)) ||
       (isFireFox && /(?:Tablet)/.test(ua))
     const isPhone = /(?:iPhone)/.test(ua) && !isTablet
     const isPc = !isPhone && !isAndroid && !isSymbian && !isTablet
-    const isIpad = /(?:iPad|PlayBook)/.test(ua)
     return {
       isTablet,
       isPhone,

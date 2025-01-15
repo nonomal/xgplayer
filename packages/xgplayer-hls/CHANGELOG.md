@@ -1,3 +1,92 @@
+## 3.0.21
+>* fix: 🐛 (xgplayer-hls) 非MMS应支持软解
+>* fix: 调整插件内软解判断
+>* feat: 🎸 (xgplayer-hls) 支持MP3
+>* fix: 🐛 (xgplayer-hls) llhls loading
+
+## 3.0.20
+>* fix: 🐛 (xgplayer-hls) 修复HlsOption类型未导出问题
+>* refactor: 💡 (xgplayer-hls) 对外提供 APPEND_BUFFER 时机
+>* refactor: 💡 支持hls abr能力
+>* refactor: 💡 (xgplayer) 对外提供switchUrl接口参数类型
+>* fix: 🐛 (xgplayer-hls) 修复hls switchUrl指定切换点时不生效的问题
+>* refactor: 💡 (xgplayer-hls) 提供abr切换时间点位
+>* refactor: 💡 (xgplayer-hls) 重构load接口，支持删除switchURL执行之后的状态
+>* fix: 🐛 (xgplayer-hls) load函数参数变更为可选
+>* refactor: 💡 (xgplayer-hls) 提供 detachMedia 接口
+
+## 3.0.19
+>* fix: adts parser兼容异常case造成页面crash
+>* fix: m3u8 parser 兼容 EXT-X-ENDLIST出现在任意位置
+>* fix: 🐛 (xgplayer-hls) 修复重播时，视频播放到结尾一直loading的问题（重播时末尾buffer已下载）
+>* fix: (xgplayer-hls) m3u8 parser 兼容 EXT-X-ENDLIST出现在任意位置
+>* fix: (xgplayer-hls) playlist Live state
+>* fix: 🐛 (xgplayer-hls）修复hls最后一帧不渲染，并且播放到最后一直loading的问题
+>* fix(xgplayer-hls): 修复HLS点播场景空列表时未触发报错问题
+>* feat(xgplayer-hls xgplayer-transmuxer): HLS 音视频LargeGAP优化处理
+>* fix: 🐛 (xgplayer-hls) 修复播放到结尾一直loading的问题
+
+## 3.0.18
+>* refactor: 💡 (xgplayer-hls) DRM支持更多的identifiers
+>* refactor: 💡 (xgplayer-hls) MSE ChangeType不支持时，对外抛出错误
+
+## 3.0.17
+>* feat: add core.mediasourceopend event
+>* fix: 🐛 (xgplayer-hls) safari下无缝切流播放报错
+>* fix: 🐛 (xgplayer-hls) 修复preferMMS未开启时，集成hls插件播放失败的问题
+>* fix: 🐛 (xgplayer-hls) 强化MSE endOfStream触发的时机，防止卡在最后不发end事件问题
+>* fix: 🐛 (xgplayer-hls) 修复hls最后一个segment被过滤后，播放到结尾卡住问题
+>* fix: firstframe slow on lg webos
+>* fix: (xgplayer-hls) live stream feedback liveEdge by appended segment
+>* fix: (xgplayer-transmuxer) video expected nextDts incorrect cased by fps inaccuracy (case av unsync)
+
+```
+const player = new Player({
+    plugins: [HlsPlugin],
+    hls: {
+        mseLowLatency: false // default true. off on lg webos
+    }
+})
+```
+
+
+## 3.0.16
+-
+
+## 3.0.15
+>* feat: 🎸 (xgplayer-hls) hls支持MMS
+>* fix: 🐛 (xgplayer-hls) 加密HLS播放失败问题
+
+## 3.0.14
+>* feat: 🎸 (xgplayer-hls) 加密hls支持更多的Key System
+>* fix(xgplayer-hls): 修复当末尾碎片sn=0时，sn被错误的兜底为-1的问题
+
+## 3.0.13
+-
+
+## 3.0.12
+-
+
+## 3.0.11
+>* feat(xgplayer-hls): update manifestLoadTimeout to audio\subtitle manifest
+>* feat(xgplayer-hls):新增参数支持单独设置m3u8文件请求超时时间
+
+## xgplayer-hls@3.0.11-alpha.3
+>* feat: support m3u8 manifest loadtimeout
+## xgplayer-hls@3.0.11-alpha.2
+>* fix: m3u8 302 redirect
+
+## xgplayer-hls@3.0.11-alpha.1
+>* fix: 首个分片timestamp breaked case duration large value
+
+## xgplayer-hls@3.0.10
+>* fix: preloadTime not work for vod stream when start gap meet
+>* fix: subtitle segments not throw
+>* fix: handle buffer full play problem
+>* fix: 修复重播时，同一个请求请求两次问题
+>* feat: add PROGRAM-DATE-TIME tag parse
+
+
 ## xgplayer-hls@3.0.9-alpha.2
 >* feat: llhls支持(ts分片格式)
 >* feat: 增加`useLowLatency`配置参数可以主动关闭低延迟模式

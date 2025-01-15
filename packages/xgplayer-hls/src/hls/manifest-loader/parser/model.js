@@ -7,12 +7,34 @@ export class MasterPlaylist {
   isMaster = true
 }
 
-
 const MediaType = {
   Audio: 'AUDIO',
   Video: 'VIDEO',
   SubTitle: 'SUBTITLE',
   ClosedCaptions: 'CLOSED-CAPTIONS'
+}
+
+// #EXT-X-KEY KEYFORMAT values
+// urn:uuid: https://dashif.org/identifiers/content_protection/
+const KeySystems = {
+  CLEAR_KEY: 'org.w3.clearkey',
+  FAIRPLAY: ['urn:uuid:94ce86fb-07ff-4f43-adb8-93d2fa968ca2', 'com.apple.streamingkeydelivery'],
+  WIDEVINE: ['urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed', 'com.widevine.alpha', 'com.widevine'],
+  PLAYREADY: ['urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95', 'com.microsoft.playready']
+}
+
+function flatArray (arr) {
+  let ret = []
+
+  for (let i = 0; i < arr.length; i++) {
+    if (Array.isArray(arr[i])) {
+      ret = ret.concat(flatArray(arr[i]))
+    } else {
+      ret.push(arr[i])
+    }
+  }
+
+  return ret
 }
 
 export class MediaStream {
@@ -88,15 +110,19 @@ export class MediaPlaylist {
   endPartIndex = 0
   /** @type {Array.<MediaSegment>} */
   segments = []
+  dateRanges = {}
+  skippedSegments = 0
 }
 
 export class MediaSegment {
   sn = 0 // Media Sequence Number
   cc = 0
   url = ''
+  parentUrl = ''
   title = ''
   start = 0
   duration = 0
+  dataTime = ''
   /** @type {?MediaSegmentKey} */
   key = null
   byteRange = null // [start, end]
@@ -109,6 +135,10 @@ export class MediaSegment {
 
   independent = false
   partIndex = 0
+
+  constructor (parentUrl) {
+    this.parentUrl = parentUrl
+  }
 
   get end () {
     return this.start + this.duration
@@ -163,5 +193,64 @@ export class MediaSegmentKey {
         this.iv[i] = (sn >> (8 * (15 - i))) & 0xff
       }
     }
+  }
+
+  isSegmentEncrypted () {
+    const { method } = this
+    return method === 'AES-128' // || method === 'AES-256' || method === 'AES-256-CTR'
+  }
+
+  isValidKeySystem () {
+    const isKeyFormatValid =
+    flatArray([
+      KeySystems.CLEAR_KEY,
+      KeySystems.FAIRPLAY,
+      KeySystems.WIDEVINE,
+      KeySystems.PLAYREADY
+    ]).indexOf(this.keyFormat) > -1
+    if (!isKeyFormatValid) {
+      return false
+    }
+
+    const isMethodValid =
+      ['SAMPLE-AES', 'SAMPLE-AES-CENC', 'SAMPLE-AES-CTR'].indexOf(this.method) > -1
+    if (!isMethodValid) {
+      return false
+    }
+    return true
+  }
+
+  isSupported () {
+    if (!this.method) {
+      return false
+    }
+    if (this.isSegmentEncrypted()) {
+      return true
+    } else if (this.isValidKeySystem()) {
+      return true
+    }
+    return false
+  }
+}
+
+export class HlsUrlParameters {
+  constructor (msn, part, skip) {
+    this.msn = msn
+    this.part = part
+    this.skip = skip
+  }
+
+  addDirectives (uri) {
+    const url = new self.URL(uri)
+    if (this.msn !== undefined) {
+      url.searchParams.set('_HLS_msn', this.msn.toString())
+    }
+    if (this.part) {
+      url.searchParams.set('_HLS_part', this.part.toString())
+    }
+    if (this.skip) {
+      url.searchParams.set('_HLS_skip', this.skip)
+    }
+    return url.href
   }
 }

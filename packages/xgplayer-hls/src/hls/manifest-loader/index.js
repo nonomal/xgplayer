@@ -1,6 +1,7 @@
 import { NetLoader, StreamingError, EVENT, ERR } from 'xgplayer-streaming-shared'
 import { M3U8Parser } from './parser'
 import { Event } from '../constants'
+import { HlsUrlParameters } from './parser/model'
 
 export class ManifestLoader {
   constructor (hls) {
@@ -8,13 +9,13 @@ export class ManifestLoader {
     this._timer = null
     this._useLowLatency = hls.config.useLowLatency
 
-    const { retryCount, retryDelay, loadTimeout, fetchOptions } = this.hls.config
+    const { retryCount, retryDelay, manifestLoadTimeout, fetchOptions } = this.hls.config
     this._loader = new NetLoader({
       ...fetchOptions,
       responseType: 'text',
       retry: retryCount,
       retryDelay: retryDelay,
-      timeout: loadTimeout,
+      timeout: manifestLoadTimeout,
       onRetryError: this._onLoaderRetry
     })
     this._audioLoader = new NetLoader({
@@ -22,7 +23,7 @@ export class ManifestLoader {
       responseType: 'text',
       retry: retryCount,
       retryDelay: retryDelay,
-      timeout: loadTimeout,
+      timeout: manifestLoadTimeout,
       onRetryError: this._onLoaderRetry
     })
 
@@ -31,7 +32,7 @@ export class ManifestLoader {
       responseType: 'text',
       retry: retryCount,
       retryDelay: retryDelay,
-      timeout: loadTimeout,
+      timeout: manifestLoadTimeout,
       onRetryError: this._onLoaderRetry
     })
 
@@ -50,6 +51,9 @@ export class ManifestLoader {
     let videoText
     let audioText
     let subtitleText
+    let videoResUrl
+    let audioResUrl
+    let subtitleResUrl
 
     try {
       const [video, audio, subtitle] = await Promise.all(toLoad)
@@ -58,14 +62,18 @@ export class ManifestLoader {
       this._emitOnLoaded(video, url)
 
       videoText = video.data
+      videoResUrl = video.response.url || url
 
       if (audioUrl) {
         audioText = audio?.data
         subtitleText = subtitle?.data
+        audioResUrl = audio?.response?.url || audioUrl
+        subtitleResUrl = subtitle?.response?.url || subtitleUrl
         audioText && this._emitOnLoaded(audio, audioUrl)
         subtitleText && this._emitOnLoaded(subtitle, subtitleUrl)
       } else {
         subtitleText = audio?.data
+        subtitleResUrl = audio?.response?.url || subtitleUrl
         subtitleText && this._emitOnLoaded(audio, subtitleUrl)
       }
 
@@ -84,15 +92,15 @@ export class ManifestLoader {
         if (audioText) audioText = onPreM3U8Parse(audioText, true) || audioText
         if (subtitleText) subtitleText = onPreM3U8Parse(subtitleText, true) || subtitleText
       }
-      playlist = M3U8Parser.parse(videoText, url, this._useLowLatency)
+      playlist = M3U8Parser.parse(videoText, videoResUrl, this._useLowLatency)
       if (playlist?.live === false && playlist.segments && !playlist.segments.length) {
         throw new Error('empty segments list')
       }
       if (audioText) {
-        audioPlaylist = M3U8Parser.parse(audioText, audioUrl, this._useLowLatency)
+        audioPlaylist = M3U8Parser.parse(audioText, audioResUrl, this._useLowLatency)
       }
       if (subtitleText) {
-        subtitlePlaylist = M3U8Parser.parse(subtitleText, subtitleUrl, this._useLowLatency)
+        subtitlePlaylist = M3U8Parser.parse(subtitleText, subtitleResUrl, this._useLowLatency)
       }
 
     } catch (error) {
@@ -102,6 +110,13 @@ export class ManifestLoader {
       if (playlist.isMaster) {
         this.hls.emit(Event.HLS_MANIFEST_LOADED, { playlist })
       } else {
+        if (this._useLowLatency) {
+          if (playlist.canBlockReload) {
+            this.deliveryDirectives = new HlsUrlParameters(playlist.nextSN, playlist.nextIndex, '')
+          } else {
+            this.deliveryDirectives = null
+          }
+        }
         this.hls.emit(Event.HLS_LEVEL_LOADED, { playlist })
       }
     }
@@ -140,8 +155,12 @@ export class ManifestLoader {
     let retryCount = this.hls.config.pollRetryCount
     const fn = async () => {
       clearTimeout(this._timer)
+      let reqUrl = url
       try {
-        const res = await this.load(url, audioUrl, subtitleUrl)
+        if (this.deliveryDirectives) {
+          reqUrl = this.deliveryDirectives.addDirectives(url)
+        }
+        const res = await this.load(reqUrl, audioUrl, subtitleUrl)
         if (!res[0]) return
         retryCount = this.hls.config.pollRetryCount
         cb(res[0], res[1], res[2])

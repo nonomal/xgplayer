@@ -1,5 +1,6 @@
 import { BasePlugin, Sniffer } from '../../plugin'
 import { runHooks } from '../../plugin/hooksDescriptor'
+import { LEAVE_PLAYER, ENTER_PLAYER } from '../../events'
 import './index.scss'
 
 const MOUSE_EVENTS = {
@@ -33,7 +34,7 @@ export default class PCPlugin extends BasePlugin {
   }
 
   initEvents () {
-    const { video, root } = this.player
+    const { media, root } = this.player
     const { enableContextmenu } = this.playerConfig
 
     root && root.addEventListener('click', this.onVideoClick, false)
@@ -41,7 +42,7 @@ export default class PCPlugin extends BasePlugin {
     Object.keys(MOUSE_EVENTS).map(item => {
       root.addEventListener(item, this[MOUSE_EVENTS[item]], false)
     })
-    enableContextmenu && video && video.addEventListener('contextmenu', this.onContextmenu, false)
+    !enableContextmenu && media && media.addEventListener('contextmenu', this.onContextmenu, false)
   }
 
   switchPlayPause (e) {
@@ -70,6 +71,7 @@ export default class PCPlugin extends BasePlugin {
     } else {
       player.focus()
     }
+    this.emit(ENTER_PLAYER)
   }
 
   onMouseLeave = (e) => {
@@ -78,9 +80,10 @@ export default class PCPlugin extends BasePlugin {
       if (leavePlayerTime) {
         this.player.focus({ autoHide: true, delay: leavePlayerTime })
       } else {
-        this.player.blur()
+        this.player.blur({ignorePaused: true})
       }
     }
+    this.emit(LEAVE_PLAYER)
   }
 
   onContextmenu (e) {

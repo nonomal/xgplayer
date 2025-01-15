@@ -5,8 +5,8 @@
     display: flex;
     align-items: center;
     position: relative;
-    min-width: 50px;
-    height: 12px;
+    min-width: 10px;
+    height: 20px;
     left: 0;
     right: 0;
     top: 0;
@@ -279,6 +279,10 @@
   xg-mini-progress-cache {
     background: $progressCacheBgColor
   }
+}
+
+.xg-mini-progress-show {
+  display: block;
 }
 
 .xgplayer-inactive, .xgplayer-mini {

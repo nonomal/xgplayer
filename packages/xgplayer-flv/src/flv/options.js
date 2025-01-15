@@ -11,16 +11,25 @@
  *  bufferBehind?: number,
  *  retryCount?: number,
  *  retryDelay?: number,
+ *  disconnectRetryCount?: number
  *  loadTimeout?: number,
  *  maxReaderInterval?: number,
  *  preloadTime?: number,
+ *  defaultVodLoadSize?: number,
  *  disconnectTime?: number,
  *  fetchOptions?: RequestInit,
  *  seamlesslyReload: boolean,
 *   keepStatusAfterSwitch?: boolean,
 *   onlyVideo?: boolean,
 *   onlyAudio?: boolean,
+*   preferMMS?: boolean,
+*   mseLowLatency?: boolean,
+*   durationForLowLatency?: number, // s
+*   chunkCountForSpeed?: number,
+*   skipChunkSize?: number, // Byte
+*   longtimeNoReceived?: number,
 *   preProcessUrl?: (url: string, ext?: { [propName: string]: any }) => { url: string, [propName: string]: any }
+*   enableStartGapJump?: boolean
  * }} FlvOption
  */
 
@@ -32,9 +41,11 @@ export function getOption (opts) {
   const ret = {
     retryCount: 3,
     retryDelay: 1000,
+    disconnectRetryCount: 0,
     loadTimeout: 10000,
     maxReaderInterval: 5000,
     preloadTime: 5,
+    defaultVodLoadSize: 10000000,
     isLive: false,
     softDecode: false,
     bufferBehind: 10,
@@ -44,6 +55,14 @@ export function getOption (opts) {
     keepStatusAfterSwitch: true,
     onlyVideo: false,
     onlyAudio: false,
+    preferMMS: false,
+    mseLowLatency: true, // mse 低延迟模式渲染 https://issues.chromium.org/issues/41161663
+    durationForMSELowLatencyOff: 6, // s
+    chunkCountForSpeed: 50,
+    skipChunkSize: 1000,
+    longtimeNoReceived: 3000,
+    // currentTime 为 0 时，是否允许跳洞。兼容 tizen 首帧跳洞导致帧回退问题。
+    enableStartGapJump: true,
     ...opts
   }
 

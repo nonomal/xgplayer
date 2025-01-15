@@ -22,11 +22,26 @@ class HlsJsPlugin extends BasePlugin {
     this.browser = utils.getBrowserVersion()
     this.hls = null
     this.hlsOpts = {}
+    this.player.handleSource = false // 关闭player源处理
+  }
+
+  /**
+   * @private
+   */
+  _adaptHlsJsConfig (hlsOpts = {}) {
+    const { playerConfig } = this
+
+    if (!hlsOpts?.startPosition && typeof playerConfig.startTime === 'number') {
+      hlsOpts.startPosition = playerConfig.startTime
+    }
+
+    return hlsOpts
   }
 
   afterCreate () {
     const { hlsOpts } = this.config
-    this.hlsOpts = hlsOpts
+    this.hlsOpts = this._adaptHlsJsConfig(hlsOpts)
+
     this.on(Events.URL_CHANGE, (url) => {
       if (/^blob/.test(url)) {
         return
@@ -80,7 +95,6 @@ class HlsJsPlugin extends BasePlugin {
     }
     this.hls = new Hls(this.hlsOpts)
     this.hls.once(Hls.Events.MEDIA_ATTACHED, () => {
-      console.log('Hls.Events.MEDIA_ATTACHED', url)
       this.hls.loadSource(url)
     })
 
@@ -93,7 +107,9 @@ class HlsJsPlugin extends BasePlugin {
       if (data.fatal) {
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
-            this.hls.startLoad()
+            if (!(data?.networkDetails?.status === 404)) {
+              this.hls.startLoad()
+            }
             break
           case Hls.ErrorTypes.MEDIA_ERROR:
             this.hls.recoverMediaError()
@@ -103,7 +119,7 @@ class HlsJsPlugin extends BasePlugin {
         }
       }
     })
-    this.hls.attachMedia(this.player.video)
+    this.hls.attachMedia(this.player.media || this.player.video)
     this._statistics()
   }
 

@@ -106,22 +106,27 @@ class MediaProxy extends EventEmitter {
   constructor (options) {
     super(options)
     /**
+     * @type { boolean }
      * @private
      */
     this._hasStart = false
     /**
+     * @type { number }
      * @private
      */
     this._currentTime = 0
     /**
+     * @type { number }
      * @private
      */
     this._duration = 0
     /**
+     * @type {{[propName: string]: any}}
      * @private
      */
     this._internalOp = {}
     /**
+     * @type { boolean }
      * @private
      */
     this._lastMuted = false
@@ -196,6 +201,11 @@ class MediaProxy extends EventEmitter {
     }
     if (options.autoplay) {
       this.media.autoplay = true
+    }
+
+    // Warning：一些移动端浏览器（Like Vivo）需要直接设置JS属性，否则会导致失效
+    if (options.playsinline) {
+      this.media.playsinline = true
     }
 
     /**
@@ -371,7 +381,7 @@ class MediaProxy extends EventEmitter {
       let _e = this.media.error || error
       const type = _e.code ? ERROR_TYPE_MAP[_e.code] : 'other'
       let message = _e.message
-      if (!this.media.currentSrc) {
+      if (!(this.media.currentSrc || this.media.srcObject)) {
         message = 'empty_src'
         _e = {
           code: 6,
@@ -780,6 +790,14 @@ class MediaProxy extends EventEmitter {
     this.media.volume = vol
   }
 
+  /**
+   * @type { number }
+   * @description 返回视频的纵横比
+   */
+  get aspectRatio () {
+    return this.media ? this.media.videoWidth / this.media.videoHeight : 0
+  }
+
   addInnerOP (event) {
     this._internalOp[event] = true
   }
@@ -790,7 +808,6 @@ class MediaProxy extends EventEmitter {
   /** ******************* 以下api只有申明作用,具体实现依赖EventEmitter ******************/
 
   /**
-   *
    * @param { string } event
    * @param { any } [data]
    * @returns
@@ -800,9 +817,8 @@ class MediaProxy extends EventEmitter {
   }
 
   /**
-   *
    * @param { string } event
-   * @param { (data?: any) => any } callback
+   * @param { (...args: any[]) => any } callback
    * @returns
    */
   on (event, callback, ...args) {
@@ -810,9 +826,8 @@ class MediaProxy extends EventEmitter {
   }
 
   /**
-   *
    * @param { string } event
-   * @param { (data?: any) => any } callback
+   * @param { (...args: any[]) => any } callback
    * @returns
    */
   once (event, callback, ...args) {
@@ -822,7 +837,7 @@ class MediaProxy extends EventEmitter {
   /**
    *
    * @param { string } event
-   * @param { (data?: any) => any } callback
+   * @param { (...args: any[]) => any } callback
    * @returns
    */
   off (event, callback, ...args) {

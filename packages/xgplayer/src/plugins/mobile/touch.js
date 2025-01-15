@@ -56,7 +56,13 @@ class Touche {
     })
     this.root = dom
     this.events = config.eventType === 'mouse' ? MOUSES : TOUCHS
+    /**
+     * @type { null | number}
+     */
     this.pressIntrvalId = null
+    /**
+     * @type { null | number}
+     */
     this.dbIntrvalId = null
     this.__handlers = {}
     this._initEvent()
@@ -160,7 +166,6 @@ class Touche {
 
   onTouchEnd = (e) => {
     const { _pos, root } = this
-    // config.needPreventDefault && preventToucheDefault(e)
     this.__clearPress()
     root.removeEventListener(this.events.cancel, this.onTouchCancel)
     root.removeEventListener(this.events.end, this.onTouchEnd)

@@ -1,5 +1,7 @@
 import { FlvDemuxer, FMP4Remuxer, WarningType } from 'xgplayer-transmuxer'
 import { MSE, Buffer, EVENT, ERR, StreamingError, Logger, concatUint8Array } from 'xgplayer-streaming-shared'
+import { TRANSFER_EVENT } from './transfer-cost'
+
 const logger = new Logger('BufferService')
 
 export class BufferService {
@@ -29,11 +31,15 @@ export class BufferService {
     return this._demuxer?._fixer?._baseDts
   }
 
+  get blobUrl () {
+    return this._mse?.url
+  }
+
   /**
    * @param {import('../index').Flv} flv
    * @param {Object} [softVideo]
    */
-  constructor (flv, softVideo, opts) {
+  constructor (flv, softVideo, opts = {}) {
     this.flv = flv
     this._opts = opts
 
@@ -41,9 +47,16 @@ export class BufferService {
       this._softVideo = softVideo
     } else {
       this._remuxer = new FMP4Remuxer(this._demuxer.videoTrack, this._demuxer.audioTrack)
-      this._mse = new MSE()
+      this._mse = new MSE(null, {
+        preferMMS:
+          typeof opts.preferMMS === 'boolean' ? opts.preferMMS : !!opts.perferMMS /* perferMMS is typo, deprecated */
+      })
       this._mse.bindMedia(flv.media)
     }
+  }
+
+  isFull (mediaType = MSE.VIDEO){
+    return this._mse.isFull(mediaType)
   }
 
   seamlessSwitch () {
@@ -68,6 +81,15 @@ export class BufferService {
     this._contiguous = false
     this._sourceCreated = false
     this._initSegmentId = ''
+    this.resetSeamlessSwitchStats()
+  }
+
+  resetSeamlessSwitchStats () {
+    this.seamlessLoadingSwitch = null
+    this.seamlessLoadingSwitching = false
+    if (this._demuxer) {
+      this._demuxer.seamlessLoadingSwitching = false
+    }
   }
 
   async endOfStream () {
@@ -103,6 +125,7 @@ export class BufferService {
   }
 
   async appendBuffer (chunk) {
+    let switchingNoReset = false
     if (this._cachedBuffer) {
       chunk = concatUint8Array(this._cachedBuffer, chunk)
       this._cachedBuffer = null
@@ -112,11 +135,26 @@ export class BufferService {
     if (!chunk || !chunk.length || !demuxer) return
 
     try {
-      demuxer.demuxAndFix(chunk, this._discontinuity, this._contiguous, this._demuxStartTime)
+      this.flv._transferCost.start(TRANSFER_EVENT.DEMUX)
+      demuxer.demuxAndFix(chunk, this.seamlessLoadingSwitching || this._discontinuity, this._contiguous, this._demuxStartTime, this.seamlessLoadingSwitching)
+      this.seamlessLoadingSwitching = false
+      this.flv._transferCost.end(TRANSFER_EVENT.DEMUX)
     } catch (error) {
       throw new StreamingError(ERR.DEMUX, ERR.SUB_TYPES.FLV, error)
     }
     const { videoTrack, audioTrack, metadataTrack } = demuxer
+
+    if (this.seamlessLoadingSwitch) {
+      const idx = videoTrack.samples.findIndex(sample => (sample.originDts === videoTrack.lastKeyFrameDts))
+      if (idx >= 0) {
+        videoTrack.samples.splice(idx)
+        await this.seamlessLoadingSwitch()
+        // 切换清晰度后，删除原清晰度数据
+        this.seamlessLoadingSwitch = null
+        chunk = null
+        switchingNoReset = true
+      }
+    }
 
     let videoExist = videoTrack.exist()
     let audioExist = audioTrack.exist()
@@ -154,11 +192,18 @@ export class BufferService {
     const videoType = videoTrack.type
     const audioType = audioTrack.type
     this._fireEvents(videoTrack, audioTrack, metadataTrack)
-    this._discontinuity = false
-    this._contiguous = true
-    this._demuxStartTime = 0
+    if (!switchingNoReset) {
+      this._discontinuity = false
+      this._contiguous = true
+      this._demuxStartTime = 0
+    }
 
     const mse = this._mse
+    const afterAppend = () => {
+      if (this.flv?.emit) {
+        this.flv?.emit(EVENT.APPEND_BUFFER, {})
+      }
+    }
 
     // emit demuxed track
     this.flv.emit(EVENT.DEMUXED_TRACK, {videoTrack})
@@ -187,7 +232,16 @@ export class BufferService {
 
       let remuxResult
       try {
+        // LG webos5.4系统上发现, 直播流开启low latency mode渲染的话，出首帧后需要等一段时间才触发loadeddata、canplay事件,影响首帧统计
+        // low latency mode通过解析封装的fmp4中对媒体播放时长的描述判断 https://issues.chromium.org/issues/41161663
+        if (this._needInitSegment && !this._opts.mseLowLatency) {
+          videoTrack.duration = this._opts.durationForMSELowLatencyOff * videoTrack.timescale
+          audioTrack.duration = this._opts.durationForMSELowLatencyOff * audioExist.timescale
+        }
+        this.flv._transferCost.start(TRANSFER_EVENT.REMUX)
         remuxResult = this._remuxer.remux(this._needInitSegment)
+        this.flv._transferCost.end(TRANSFER_EVENT.REMUX)
+
       } catch (error) {
         throw new StreamingError(ERR.REMUX, ERR.SUB_TYPES.FMP4, error)
       }
@@ -204,9 +258,17 @@ export class BufferService {
       if (remuxResult.videoSegment) p.push(mse.append(videoType, remuxResult.videoSegment))
       if (remuxResult.audioSegment) p.push(mse.append(audioType, remuxResult.audioSegment))
 
-      return Promise.all(p)
+      this.flv._transferCost.start(TRANSFER_EVENT.APPEND)
+
+      const ret = Promise.all(p)
+      ret.then(afterAppend).then(() => {
+        this.flv._transferCost.end(TRANSFER_EVENT.APPEND)
+        afterAppend()
+      })
+      return ret
     } else if (this._softVideo) {
       this._softVideo.appendBuffer(videoTrack, audioTrack)
+      afterAppend()
     }
   }
 
@@ -254,7 +316,7 @@ export class BufferService {
   }
 
   _fireEvents (videoTrack, audioTrack, metadataTrack) {
-    logger.debug(videoTrack.samples, audioTrack.samples)
+    logger.debug(`videoTrack samples count: ${videoTrack.samples.length}, audioTrack samples count: ${audioTrack.samples.length}`)
 
     metadataTrack.flvScriptSamples.forEach(sample => {
       this.flv.emit(EVENT.FLV_SCRIPT_DATA, sample)
@@ -263,7 +325,7 @@ export class BufferService {
 
     videoTrack.samples.forEach((sample) => {
       if (sample.keyframe) {
-        this.flv.emit(EVENT.KEYFRAME, { pts: sample.pts })
+        this.flv.emit(EVENT.KEYFRAME, { pts: sample.originPts })
       }
     })
 
