@@ -19,34 +19,10 @@ const pluginsManager = {
       player.resize()
     })
 
-    // 默认第一个是激活状态
-    if (Object.keys(this.pluginGroup).length === 0) {
-      player.isUserActive = true
-    }
-
     this.pluginGroup[cgid] = {
-      _player: player,
       _originalOptions: player.config || {},
       _plugins: {}
     }
-  },
-
-  /**
-   * Check whether there is a player instance in the current dom
-   * @param {Element} root
-   */
-  checkPlayerRoot (root) {
-    if (this.pluginGroup) {
-      const _keys = Object.keys(this.pluginGroup)
-      for (let i = 0; i < _keys.length; i++) {
-        const _p = this.pluginGroup[_keys[i]]._player
-        if (_p.root === root) {
-          return _p
-        }
-      }
-      return null
-    }
-    return null
   },
 
   formatPluginInfo (plugin, config) {
@@ -154,7 +130,7 @@ const pluginsManager = {
     }
     const plugins = this.pluginGroup[cgid]._plugins
     const originalOptions = this.pluginGroup[cgid]._originalOptions
-    options.player = this.pluginGroup[cgid]._player
+    options.player = player
 
     const pluginName = options.pluginName || plugin.pluginName
     if (!pluginName) {
@@ -391,47 +367,6 @@ const pluginsManager = {
       }
     })
   },
-  /**
-   * 设置实例的用户行为激活状态
-   * @param { number | string } playerId
-   * @param { boolean } isActive
-   * @returns { number | null }
-   */
-  setCurrentUserActive (playerId, isActive) {
-    if (!this.pluginGroup[playerId]) {
-      return
-    }
-    if (!isActive) {
-      this.pluginGroup[playerId]._player.isUserActive = isActive
-      return playerId
-    }
-    const keys = Object.keys(this.pluginGroup)
-    for (let i = 0; i < keys.length; i++) {
-      const c = this.pluginGroup[keys[i]]
-      if (c && c._player) {
-        this.pluginGroup[keys[i]]._player.isUserActive = false
-      }
-    }
-    this.pluginGroup[playerId]._player.isUserActive = isActive
-    return playerId
-  },
-  /**
-   * 获取当前处理激活态的实例id
-   * @returns { number | null }
-   */
-  getCurrentUseActiveId () {
-    if (!this.pluginGroup) {
-      return
-    }
-    const keys = Object.keys(this.pluginGroup)
-    for (let i = 0; i < keys.length; i++) {
-      const c = this.pluginGroup[keys[i]]
-      if (c && c._player && c._player.isUserActive) {
-        return keys[i]
-      }
-    }
-    return null
-  },
 
   destroy (player) {
     const cgid = player._pluginInfoId
@@ -443,17 +378,8 @@ const pluginsManager = {
     for (const item of Object.keys(plugins)) {
       this.unRegister(cgid, item)
     }
-
-    const _isUseActive = player.isUseActive
     delete this.pluginGroup[cgid]
     delete player._pluginInfoId
-
-    if (_isUseActive) {
-      const keys = Object.keys(this.pluginGroup)
-      if (keys.length > 0) {
-        this.setCurrentUserActive(keys[keys.length - 1], true)
-      }
-    }
   }
 }
 

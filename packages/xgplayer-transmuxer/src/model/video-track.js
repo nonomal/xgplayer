@@ -62,6 +62,8 @@ export class VideoTrack {
 
   isVideo = true
 
+  lastKeyFrameDts = 0
+
   kid = null
 
   pssh = null
@@ -90,10 +92,30 @@ export class VideoTrack {
     this.hvcC = null
   }
 
+  get firstDts () {
+    return this.samples.length ? this.samples[0].dts : null
+  }
+
+  get firstPts () {
+    return this.samples.length ? this.samples[0].pts : null
+  }
+
+  get samplesDuration () {
+    if (this.samples.length > 0) {
+      const first = this.samples[0]
+      const last = this.samples[this.samples.length - 1]
+      return last.dts - first.dts + last.duration
+    }
+    return 0
+  }
+
   /**
    * @returns {boolean}
    */
   exist () {
+    if (/av01/.test(this.codec)) {
+      return true
+    }
     return !!(this.pps.length && this.sps.length && this.codec)
   }
 

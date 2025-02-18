@@ -1,3 +1,77 @@
+## 3.0.20
+feat: 🎸 (xgplayer-transmuxer) support opus codec for audio
+feat: 🎸 (flv&hls) support g711 play by AudioContext
+
+## 3.0.19
+>* refactor: update download speed evaluate strategy, export configuration for speed evaluate
+```
+const player = new Player({
+    isLive: true,
+    plugins: [FlvPlugin],
+    flv: {
+        chunkCountForSpeed?: number, // default: 50, 累计最近多少次接受的chunk用于平均速度计算
+        skipChunkSize?: number,  // default: 1000 Byte, 过滤数据量小于1000字节的chunk，不用于速度计算
+        longtimeNoReceived?: number, // default: 3000ms, 超过一定间隔无新数据接收时，增加数据量为0的chunk用于速度计算
+    }
+})
+```
+>* fix: disconnetcTime use buffer time instead buffer edge
+>* fix: (xgplayer-flv) preProcessUrl 容错处理
+
+## xgplayer-flv@3.0.17
+>* fix: firstframe slow on lg webos
+>* fix: autoplay=false 不断流
+>* feat: add chaseframe event
+>* feat: loadstart event add seamless switch status
+
+```
+
+const player = new Player({
+    plugins: [FlvPlugin],
+    flv: {
+        mseLowLatency: false // default true. off on lg webos
+    }
+})
+
+player.on('core_event', e => {
+    if(e.eventName === 'core.loadstart) {
+        // e.url
+        // e.seamlessSwitching ?: boolean // 标识冲拉流是否处于无缝切换阶段
+    }
+    if(e.eventName === 'core.chaseframe') {
+        // 追帧时触发
+    }
+})
+```
+
+
+## xgplayer-flv@3.0.14
+>* feat: support mms on safari 17.1+
+>* feat: newly increased api and props
+
+```
+import FlvPlugin from "xgplayer-flv"
+
+FlvPlugin.isSupportedMMS(): boolean // 环境是否支持ManagedMediaSource
+
+new Player({
+    plugins: [FlvPlugin],
+    flv: {
+        preferMMS: true // default:false, 对于支持MMS的环境优先使用MMS
+    }
+})
+
+
+```
+
+
+## xgplayer-flv@3.0.11
+>* feat: 断网、弱网增加重试配置
+>* refact: 点播流播放重构
+
+## xgplayer-flv@3.0.10
+>* fix: gop statistics
+
 ## xgplayer-flv@3.0.9
 
 ## xgplayer-flv@3.0.8
@@ -7,7 +81,6 @@
 ## xgplayer-flv@3.0.6
 
 ## xgplayer-flv@3.0.5
-
 
 ## xgplayer-flv@3.0.4
 >* fix: (xgplayer-flv) play error with only script tag received first fetch

@@ -11,10 +11,14 @@ function defaultOpt() {
     retryCount: 3,
     retryDelay: 1000,
     loadTimeout: 10000,
-    preloadTime: 10,
+    preloadTime: 180,
     bufferBehind: 10,
     maxJumpDistance: 3,
-    startTime: 0
+    startTime: 0,
+    fixerConfig:{
+      forceFixLargeGap:true,
+      largeGapThreshold: 5
+    }
   }
 }
 var cachedOpt = localStorage.getItem('xg:test:hls:opt')
@@ -157,6 +161,12 @@ window.onload = function () {
       player.on('retry', function (event) { pushEvent('retry', event) })
       player.on('core_event', function (event) { pushEvent(event.eventName, event) })
       player.on('error', function (event) { pushEvent(event.errorType, event, dlError) })
+      player.on('core_event', (info) => {
+        const { eventName, playlist } = info
+      if (eventName === 'core.hlslevelloaded' && playlist) {
+        console.log('playlist1111', playlist)
+      }
+      })
 
       dStreamForce.checked = true
       function refreshStreams() {
@@ -338,7 +348,7 @@ window.onload = function () {
     var startTime = window.prompt('[点播]开始播放时间点', 0)
     startTime = Number(startTime)
     if (isNaN(startTime)) startTime = 0
-    player.switchURL(url, startTime)
+    player.switchURL(url, startTime).then(res=> console.log('switchURL success', res)).catch(err => console.error('switchURL error', err))
   }
   dbSetUrl.onclick = function () {
     var url = window.prompt('设置的 url 地址')
@@ -360,12 +370,13 @@ window.onload = function () {
   setTimeout(function () {
     var lastPlayback = null
     var fps = 0
-    var prevTime = 0
     setInterval(function () {
       if (player && player.plugins.hls) {
         var t = player.currentTime
-        prevTime = t
         var hls = player.plugins.hls.core
+        if (!hls) {
+          return
+        }
         var buf = hls.bufferInfo()
         var pq = hls.playbackQuality()
         var sp = hls.speedInfo()

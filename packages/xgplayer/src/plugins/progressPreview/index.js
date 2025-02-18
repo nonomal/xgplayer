@@ -29,7 +29,7 @@ const CALLBACK_MAP = {
   dragend: 'onProgressDragEnd',
   click: 'onProgressClick',
   mouseover: 'onProgressMouseOver',
-  mouseenter: 'onProgressMove'
+  mouseenter: 'onProgressMouseOver'
 }
 
 /** */
@@ -86,7 +86,7 @@ export default class ProgressPreview extends Plugin {
       }
     })
     this.transformTimeHook = this.hook('transformTime', (time) => {
-      this.setTimeContent(time)
+      this.setTimeContent(Util.format(time))
     })
     initDotsAPI(this)
 
@@ -319,10 +319,10 @@ export default class ProgressPreview extends Plugin {
 
   /**
    * @description 设置自定义时间显示字符串
-   * @param {number} time
+   * @param {string} str
    */
-  setTimeContent (time) {
-    this.timeStr = `${Util.format(time)}`
+  setTimeContent (str) {
+    this.timeStr = str
   }
 
   updateThumbnails (time) {
@@ -442,7 +442,11 @@ export default class ProgressPreview extends Plugin {
     Util.addClass(this.root, 'hide')
   }
 
-  show () {
+  /**
+   * @param {string} [value]
+   * @returns
+   */
+  show (value) {
     Util.removeClass(this.root, 'hide')
   }
 

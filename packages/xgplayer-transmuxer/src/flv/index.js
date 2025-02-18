@@ -3,6 +3,8 @@ import { FlvFixer } from './fixer'
 import { concatUint8Array, Logger, readBig32 } from '../utils'
 import { AAC, AVC, HEVC, NALu } from '../codec'
 import { AMF } from './amf'
+import { FlvSoundFormat } from './soundFormat'
+import { OPUS } from '../codec/opus'
 
 const logger = new Logger('FlvDemuxer')
 
@@ -35,15 +37,18 @@ export class FlvDemuxer {
 
   /**
    * @param {Uint8Array} data
-   * @param {boolean} [discontinuity=false]
+   * @param {boolean} [discontinuity=false] 切流
    * @param {boolean} [contiguous=true]
    * @returns {DemuxResult}
    */
-  demux (data, discontinuity = false, contiguous = true) {
+  demux (data, discontinuity = false, contiguous = true, seamlessLoadingSwitching) {
     const { audioTrack, videoTrack, metadataTrack } = this
 
     if (discontinuity || !contiguous) {
       this._remainingData = null
+    }
+
+    if (discontinuity) {
       this._headerParsed = false
     }
 
@@ -107,6 +112,7 @@ export class FlvDemuxer {
       if (tagType === 8) {
         this._parseAudio(bodyData, timestamp)
       } else if (tagType === 9) {
+        if (seamlessLoadingSwitching) this.seamlessLoadingSwitching = true
         this._parseVideo(bodyData, timestamp)
       } else if (tagType === 18) {
         this._parseScript(bodyData, timestamp)
@@ -128,7 +134,7 @@ export class FlvDemuxer {
     }
 
     audioTrack.formatTimescale = videoTrack.formatTimescale = videoTrack.timescale = metadataTrack.timescale = 1000
-    audioTrack.timescale = audioTrack.sampleRate || 0
+    audioTrack.timescale = audioTrack.codecType === AudioCodecType.OPUS ? 1000 : audioTrack.sampleRate || 0
 
     if (!audioTrack.exist() && audioTrack.hasSample()) {
       audioTrack.reset()
@@ -136,6 +142,29 @@ export class FlvDemuxer {
     if (!videoTrack.exist() && videoTrack.hasSample()) {
       videoTrack.reset()
     }
+
+    const scriptDataObject = metadataTrack.flvScriptSamples[metadataTrack.flvScriptSamples.length - 1]
+    const metaData = scriptDataObject?.data?.onMetaData
+
+    if (metaData) {
+      if (videoTrack?.exist()) {
+        if (metaData.hasOwnProperty('duration')) {
+          videoTrack.duration = metaData.duration * 1000
+        }
+
+        if (metaData.hasOwnProperty('width') && metaData.hasOwnProperty('height')) {
+          videoTrack.width = metaData.width
+          videoTrack.height = metaData.height
+        }
+      }
+
+      if (audioTrack?.exist()) {
+        if (metaData.hasOwnProperty('duration')) {
+          audioTrack.duration = metaData.duration * 1000
+        }
+      }
+    }
+
 
     return {
       videoTrack,
@@ -166,8 +195,8 @@ export class FlvDemuxer {
    * @param {number} [startTime=0]
    * @returns {DemuxResult}
    */
-  demuxAndFix (data, discontinuity, contiguous, startTime) {
-    this.demux(data, discontinuity, contiguous)
+  demuxAndFix (data, discontinuity, contiguous, startTime, seamlessLoadingSwitching) {
+    this.demux(data, discontinuity, contiguous, seamlessLoadingSwitching)
     return this.fix(startTime, discontinuity, contiguous)
   }
 
@@ -182,6 +211,11 @@ export class FlvDemuxer {
     return readBig32(data, 5) >= 9
   }
 
+  /**
+   * @param {Uint8Array} data
+   * @param {number} pts
+   * @private
+   */
   _parseAudio (data, pts) {
     if (!data.length) return
 
@@ -189,16 +223,17 @@ export class FlvDemuxer {
     const track = this.audioTrack
 
     if (
-      format !== 10 && // AAC
-      format !== 7 && // G.711 A-law logarithmic PCM
-      format !== 8 // G.711 mu-law logarithmic PCM
+      format !== FlvSoundFormat.AAC &&
+      format !== FlvSoundFormat.G711A &&
+      format !== FlvSoundFormat.G711M &&
+      format !== FlvSoundFormat.OPUS
     ) {
       logger.warn(`Unsupported sound format: ${format}`)
       track.reset()
       return
     }
 
-    if (format !== 10) {
+    if (format !== FlvSoundFormat.AAC && format !== FlvSoundFormat.OPUS) {
       const soundRate = (data[0] & 0x0c) >> 2
       const soundSize = (data[0] & 0x02) >> 1
       const soundType = (data[0] & 0x01)
@@ -207,19 +242,76 @@ export class FlvDemuxer {
       track.channelCount = soundType + 1
     }
 
-    if (format === 10) {
-      this._parseAac(data, pts)
-    } else {
-      this._parseG711(data, pts, format)
+    switch (format) {
+      case FlvSoundFormat.G711A:
+      case FlvSoundFormat.G711M:
+        this._parseG711(data, pts, format)
+        break
+      case FlvSoundFormat.AAC:
+        this._parseAac(data, pts)
+        break
+      case FlvSoundFormat.OPUS:
+        this._parseOpus(data, pts)
+        break
+      default:
+        break
     }
   }
 
+  /**
+   * @param {Uint8Array} data
+   * @param {number} pts
+   * @private
+   */
+  _parseOpus (data, pts) {
+    const track = this.audioTrack
+    const packetType = data[1]
+
+    track.codecType = AudioCodecType.OPUS
+
+    switch (packetType) {
+      case 0 /* Header Packets */: {
+        const ret = OPUS.parseHeaderPackets(data.subarray(2))
+        if (ret) {
+          track.codec = ret.codec
+          track.channelCount = ret.channelCount
+          track.sampleRate = ret.sampleRate
+          track.config = ret.config
+          track.sampleDuration = OPUS.getFrameDuration([], track.timescale)
+        } else {
+          track.reset()
+          logger.warn('Cannot parse AudioSpecificConfig', data)
+        }
+        break
+      }
+      case 1 /* Raw OPUS frame data */: {
+        if (pts === undefined || pts === null) return
+
+        const newSample = new AudioSample(pts, data.subarray(2), track.sampleDuration)
+        track.samples.push(newSample)
+        break
+      }
+      default:
+        logger.warn(`Unknown OpusPacketType: ${packetType}`)
+    }
+  }
+
+  /**
+   * @param {Uint8Array} data
+   * @param {number} pts
+   * @param {import('./soundFormat').FlvSoundFormat} format
+   */
   _parseG711 (data, pts, format) {
     const track = this.audioTrack
+    const audioData = data.subarray(1)
+
+    if (audioData.byteLength < 1) return
+
+    const sample = new AudioSample(pts, audioData)
     track.codecType = format === 7 ? AudioCodecType.G711PCMA : AudioCodecType.G711PCMU
     track.sampleRate = 8000
     track.codec = track.codecType
-    track.samples.push(new AudioSample(pts, data.subarray(1)))
+    track.samples.push(sample)
   }
 
   _parseAac (data, pts) {
@@ -302,8 +394,13 @@ export class FlvDemuxer {
 
       if (units && units.length) {
         const sample = new VideoSample(dts + cts, dts, units)
+        if (this.seamlessLoadingSwitching && dts < track.lastKeyFrameDts) {
+          return
+        }
+        this.seamlessLoadingSwitching = false
         if (frameType === 1) {
           sample.setToKeyframe()
+          track.lastKeyFrameDts = dts
         }
         track.samples.push(sample)
 

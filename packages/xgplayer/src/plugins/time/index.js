@@ -45,7 +45,19 @@ class Time extends Plugin {
     }
     this.durationDom = this.find('.time-duration')
     this.timeDom = this.find('.time-current')
-    this.on([Events.DURATION_CHANGE, Events.SEEKED, Events.TIME_UPDATE], () => {
+
+    this.listenEvents()
+  }
+
+  /**
+   * This method can be overridden.
+   * Eg. xgplayer-ads/ui/adTime.js
+   */
+  listenEvents () {
+    this.on([Events.DURATION_CHANGE, Events.SEEKED, Events.TIME_UPDATE], (e) => {
+      if (e.eventName === 'durationchange') {
+        this.isActiving = false
+      }
       this.onTimeUpdate()
     })
 
@@ -59,7 +71,11 @@ class Time extends Plugin {
     })
   }
 
-  show () {
+  /**
+   * @param {string} [value]
+   * @returns
+   */
+  show (value) {
     if (this.mode === 'flex') {
       this.centerCurDom && (this.centerCurDom.style.display = 'block')
       this.centerDurDom && (this.centerDurDom.style.display = 'block')
@@ -187,7 +203,7 @@ class Time extends Plugin {
       this.isActiving = false
     }
     this.off(Events.SEEKED, updateState)
-    if (player.isSeeking) {
+    if (player.isSeeking && player.media.seeking) {
       this.once(Events.SEEKED, updateState)
     } else {
       this.isActiving = false

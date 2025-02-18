@@ -1,16 +1,19 @@
 /* eslint-disable array-callback-return */
 // import 'core-js/modules/es7.string.pad-start';
-import { BasePlugin, Events, Sniffer, Errors } from 'xgplayer'
+import { BasePlugin, Events, Sniffer, Errors, Util } from 'xgplayer'
 import MP4, { MP4_EVENTS } from './mp4'
 import { ERROR_TYPES, ERROR_CODES } from './error'
 import { MSE } from 'xgplayer-streaming-shared'
 import util from './util'
 import Timer from './util/timer'
+import ProxyPromise from './util/proxy-promise'
 import { log } from './util/logger'
+
+const DESTROYED = 'DESTROYED'
 
 let _playerPlayNext = null
 
-const _playerStartInit = null
+let _playerStartInit = null
 
 let _playerChangeDefinition = null
 
@@ -30,7 +33,9 @@ export default class Mp4Plugin extends BasePlugin {
       waitingInBufferTimeOut: 5000,
       waitJampBufferMaxCnt:3,
       tickInSeconds: 0.1,
-      reqOptions: null
+      reqOptions: null,
+      closeDowngrade: false,
+      preferMMS: false
     }
   }
 
@@ -45,6 +50,7 @@ export default class Mp4Plugin extends BasePlugin {
     this._waitAdjustTimeCnt = 0
     this._lastCheckTime = util.nowTime()
     this._removeBuffeEndTime = 0
+    this._pendingPromises = []
   }
 
   afterCreate () {
@@ -64,18 +70,8 @@ export default class Mp4Plugin extends BasePlugin {
     } catch (e) {
       // NOOP
     }
-  }
 
-  beforePlayerInit () {
-    const { config } = this
-    if (config.supportHevc === undefined) {
-      if (Sniffer?.isHevcSupported && Sniffer.isHevcSupported()) {
-        config.supportHevc = true
-      }
-    }
-    this.initMp4()
-    this.attachEvents()
-    this._startProgress()
+    this._proxyPlayer()
   }
 
   attachEvents () {
@@ -92,16 +88,101 @@ export default class Mp4Plugin extends BasePlugin {
     this.off(Events.URL_CHANGE, this.switchURL)
   }
 
+  /**
+   * 代理播放器的相关API
+   * platNext、_startInit
+   */
+  _proxyPlayer () {
+    if (typeof this.player.playNext === 'function') {
+      _playerPlayNext = this.player.playNext
+    }
+    this.player.playNext = (...args) => {
+      this.playNext(...args)
+    }
+
+    _playerStartInit = this.player._startInit
+    _playerSwitchUrl = this.player.switchURL
+    _playerChangeDefinition = this.player.changeDefinition
+
+    this.player._startInit = this._playerStartInit.bind(this)
+    this.player.switchURL = this.switchURL.bind(this)
+    this.player.changeDefinition = this.changeDefinition.bind(this)
+
+    this.player.removeHooks('replay', this._replayHook)
+
+    this.player.removeHooks('retry', this._retryHook)
+  }
+
+  _playerStartInit (url) {
+    const { config, playerConfig } = this
+    if (config.supportHevc === undefined) {
+      if (Sniffer?.isHevcSupported && Sniffer.isHevcSupported()) {
+        config.supportHevc = true
+      }
+    }
+    const ret = this.initMp4()
+    this._initPromise = ret
+    this._addPendingPromise(this._initPromise)
+    if (this.mse && Util.typeOf(url) === 'String' && /^blob/.test(url) && url !== this.mse.url) {
+      url = playerConfig.url
+    }
+    ret.then(() => {
+      if (this.mse) {
+        url = this.mse.url
+      }
+      this.attachEvents()
+      this._startProgress()
+    }).catch((e) => {
+      const isBreak = this._initPromise ? this._initPromise.isBreak : false
+      if (this.isDestroy || isBreak) {
+        return
+      }
+
+      let err = e
+      if (!err.errorCode) {
+        err = new Errors(this.player, {
+          errorType: ERROR_TYPES.RUNTIME, // 'runtime',
+          // errorTypeCode: e?.errorTypeCode || ERROR_TYPES.runtime,
+          errorCode: e?.errorCode || ERROR_CODES.other,
+          vid: this.playerConfig.vid,
+          errorMessage: e?.errorMessage || e?.message,
+          mediaError: {
+            code: e?.httpCode || ERROR_CODES.other,
+            message: e?.errorMessage || e?.message,
+            errorType:e?.errorType
+          }
+        })
+        err.url = url
+      }
+      this.useVideoLoad = true
+      this.player.vtype = 'MP4_1'
+      this.player.emit('playCatch', this.player.vtype, err)
+    }).finally(() => {
+      if (!this._initPromise) {
+        return
+      }
+      const { isBreak } = this._initPromise
+      if (isBreak) {
+        return
+      }
+      this._initPromise && this._removePendingPromise(this._initPromise)
+      this._initPromise = null
+      !this.isDestroy && !isBreak && _playerStartInit.call(this.player, url)
+    })
+  }
+
   initMp4 () {
     const { player } = this
     if (!player.config.vid) {
       player.config.vid = Date.now()
     }
+    const _promise = new ProxyPromise()
     if (this.mp4) {
       this.mp4.off(MP4_EVENTS.META_READY, this._onMp4MetaReady)
       this.mp4.off(MP4_EVENTS.ERROR, this._onMp4Error)
       this.mp4.off(MP4_EVENTS.MOOV_REQ_PROGRESS, this._onMp4DataCallBack)
       this.mp4.destroy()
+      this.mp4 = null
     }
     this.mp4 = new MP4(player.config.url, {...this.config, vid: player.config.vid})
     this.mp4.on(MP4_EVENTS.META_READY, this._onMp4MetaReady)
@@ -112,6 +193,7 @@ export default class Mp4Plugin extends BasePlugin {
       this.log('[update curLoadSegmentIdx]',fragment)
     })
     this.mp4.init()
+    return _promise
   }
 
   _onMp4DataCallBack = () => {
@@ -123,7 +205,6 @@ export default class Mp4Plugin extends BasePlugin {
   _onMp4MetaReady = (meta) => {
     const { config } = this
     const isH265 = this.mp4.checkCodecH265()
-
     try {
       if (isH265 && !this.config.supportHevc) {
         const message = 'browser not support HEVC'
@@ -138,6 +219,7 @@ export default class Mp4Plugin extends BasePlugin {
         this._errorHandler(_err)
       } else {
         this._initMse(meta)
+        this._initPromise.resolve()
       }
     } catch (e) {
       const _err = new Errors(this.player, {
@@ -149,38 +231,9 @@ export default class Mp4Plugin extends BasePlugin {
         mediaError: { code: ERROR_CODES.other1, message: e?.message}
       })
       this._errorHandler(_err)
-    } finally {
-      let url = this.config.url
-      if (this.mse) {
-        url = this.mse.url
-        this._proxyPlayer()
-      }
-      this.player._startInit.call(this.player, url)
+      return
     }
     this._loadData()
-  }
-
-
-  /**
-   * 代理播放器的相关API
-   * platNext、_startInit
-   */
-  _proxyPlayer () {
-    if (typeof this.player.playNext === 'function') {
-      _playerPlayNext = this.player.playNext
-    }
-    this.player.playNext = (...args) => {
-      this.playNext(...args)
-    }
-
-    _playerSwitchUrl = this.player.switchURL
-    _playerChangeDefinition = this.player.changeDefinition
-    this.player.switchURL = this.switchURL.bind(this)
-    this.player.changeDefinition = this.changeDefinition.bind(this)
-
-    this.player.removeHooks('replay', this._replayHook)
-
-    this.player.removeHooks('retry', this._retryHook)
   }
 
   setConfig (newConfig) {
@@ -209,6 +262,11 @@ export default class Mp4Plugin extends BasePlugin {
     this.emit('playnext')
   }
 
+  checkDegrade (error) {
+    const { closeDowngrade } = this.config
+    return !closeDowngrade || error.httpCode === 'networkError'
+  }
+
 
   _onMp4Error = (err) => {
     const { vid } = this.playerConfig
@@ -218,11 +276,85 @@ export default class Mp4Plugin extends BasePlugin {
 
   _errorHandler (err) {
     const {player, config} = this
-    if (!player) {
+    if (!player || this.useVideoLoad) {
       return
     }
-    console.log('final error !!!!, ', config.vid, err)
-    this.emit('error', err)
+    if (!err.url && this.mp4?.url) {
+      err.url = this.mp4.url
+    }
+    const preState = player.paused
+    console.error('final error !!!!, ', config.vid, err)
+    this.player.vtype = 'MP4_2'
+    this.player.emit('playCatch', this.player.vtype, err)
+    const isDegrade = this.checkDegrade(err)
+    if (isDegrade) {
+      if (this._initPromise) {
+        this._removeAndRejectInitPromise(err)
+      } else {
+        this._startDegradedPlayback(err, preState)
+      }
+    } else {
+      this.player.pause()
+      this._reset()
+      const { currentTime } = player
+      this.destroyMSE()
+      player.currentTime = currentTime
+      this.emit('error', err)
+    }
+  }
+
+  /**
+   * @@description 降级到video播放
+   */
+  _startDegradedPlayback (err, preState) {
+    console.log('>>>_startDegradedPlayback')
+    const { player, playerConfig } = this
+    this.useVideoLoad = true
+    this.destroyMSE()
+    this._currentTime = player.currentTime
+    this.__onmetadataHandle = () => {
+      if (this._currentTime) {
+        player.currentTime = this._currentTime
+      }
+      if (preState) {
+        this.player.pause()
+      } else {
+        this.player.play()
+      }
+      player.media.removeEventListener('loadedmetadata', this.__onmetadataHandle)
+      this.__onmetadataHandle = null
+    }
+    player.media.addEventListener('loadedmetadata', this.__onmetadataHandle)
+    const _url = playerConfig.url
+    player.media.src = _url
+  }
+
+  _addPendingPromise (p) {
+    this._pendingPromises.push(p)
+  }
+
+  _removePendingPromise (p) {
+    // this.log(LogCacheLevel.LOG,'removePendingPromise', p?.id)
+    const idx = this._pendingPromises.indexOf(p)
+    if (idx > -1) {
+      this._pendingPromises.splice(idx, 1)
+    }
+  }
+
+  _cancelPendingPromises () {
+    if (this._pendingPromises.length > 0) {
+      this._pendingPromises.forEach(promise => {
+        promise.reject(DESTROYED)
+      })
+    }
+    this._pendingPromises = []
+  }
+
+  _removeAndRejectInitPromise (error) {
+    if (this._initPromise) {
+      this._removePendingPromise(this._initPromise)
+      this._initPromise.reject(error)
+    }
   }
 
   /**
@@ -237,21 +369,21 @@ export default class Mp4Plugin extends BasePlugin {
       await this.mse.unbindMedia()
       this.mse = null
     }
-    const isHvc = this.mp4 && this.mp4.checkCodecH265()
     const hasVideo = !!meta.videoCodec
     const hasAudio = !!meta.audioCodec
 
     let codec
     if (hasVideo && hasAudio) {
-      codec = isHvc ? 'video/mp4; codecs="hev1.1.6.L93.B0, mp4a.40.5"' : 'video/mp4; codecs="avc1.64001E, mp4a.40.5"'
+      codec = `video/mp4; codecs="${meta.videoCodec}, mp4a.40.5"`
     } else if (hasVideo) {
-      codec = isHvc ? 'video/mp4; codecs="hev1.1.6.L93.B0"' : 'video/mp4; codecs="avc1.64001E"'
+      codec = `video/mp4; codecs="${meta.videoCodec}"`
     } else {
       codec = 'video/mp4; codecs="mp4a.40.5"'
     }
 
     const contentTypes = { [MSE.VIDEO]: { mimeType: 'video/mp4', codec } }
-    this.mse = new MSE()
+
+    this.mse = new MSE(null, { preferMMS: this.config.preferMMS })
     const openPromise = this.mse.bindMedia(this.player.video)
     openPromise.then(()=> {
       const contentTypesLocal = Object.keys(contentTypes)
@@ -267,6 +399,14 @@ export default class Mp4Plugin extends BasePlugin {
       this._isMseInit = true
       this._onTimeUpdate()
     })
+  }
+
+  /**
+   * 销毁MSE对象 // 在重用MSE的时候，如果降级到video原生播放，单实例复用时，需要重新绑定url.所以降级到video原生的需要删除mse对象
+   */
+  async destroyMSE () {
+    await this.mse?.unbindMedia()
+    this.mse = null
   }
 
   _onTimeUpdate () {
@@ -304,7 +444,6 @@ export default class Mp4Plugin extends BasePlugin {
     }
     this.checkRemoveOldBitrateBuffer()
   }
-
 
   checkRemoveOldBitrateBuffer () {
     const { mse, player } = this
@@ -401,7 +540,7 @@ export default class Mp4Plugin extends BasePlugin {
     clearTimeout(this._waitInBufferTimer)
     this._waitInBufferTimer = null
     const curTime = player.currentTime
-    console.log('[>>>>onWaiting],currentTime, ',curTime, util.nowTime())
+    // console.log('[>>>>onWaiting],currentTime, ',curTime, util.nowTime())
     const buffer = player.bufferedPoint
     if (buffer.end > 0 && buffer.end - player.currentTime >= 2) {
       if (this._waitAdjustTimeCnt < config.waitJampBufferMaxCnt) {
@@ -470,7 +609,7 @@ export default class Mp4Plugin extends BasePlugin {
     // 校验是否是h265的视频
     if (!this.mp4 || !this.mse) return
     this.mse.append(MSE.VIDEO, initSeg, {vid: this.playerConfig.vid, range: null, dataLen: initSeg.byteLength, isinit: true}).then((data) => {
-      this.log('appendInitSeg end ==>>>', data.context ? data.context : null, ', costTime,', data.costtime)
+      this.log('appendInitSeg end ==>>>', data?.context,' costTime,', data?.costtime)
     })
   }
 
@@ -795,5 +934,4 @@ export default class Mp4Plugin extends BasePlugin {
       this._waitInBufferTimer = null
     }
   }
-
 }

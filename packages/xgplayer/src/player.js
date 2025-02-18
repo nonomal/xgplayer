@@ -17,6 +17,7 @@ import XG_DEBUG, { bindDebug } from './utils/debug'
 import I18N from './lang/i18n'
 import version from './version'
 import { STATES, STATE_ARRAY } from './state'
+import { InstManager, checkPlayerRoot } from './instManager'
 
 /**
  * @typedef { import ('./defaultConfig').IPlayerOptions } IPlayerOptions
@@ -27,10 +28,20 @@ import { STATES, STATE_ARRAY } from './state'
  * @typedef { import ('./defaultConfig').IUrl } IUrl
  */
 
+/**
+ * @typedef {boolean | {
+ *    seamless?: boolean,
+ *    currentTime?: number,
+ *    bitrate?: number
+ * }} SwitchUrlOptions
+ */
+
 /* eslint-disable camelcase */
 const PlAYER_HOOKS = ['play', 'pause', 'replay', 'retry']
 let REAL_TIME_SPEED = 0 // 实时下载速率, kb/s
 let AVG_SPEED = 0 // 平均下载速率, kb/s
+/** @type { InstManager } */
+let instManager = null
 
 class Player extends MediaProxy {
   /**
@@ -49,20 +60,36 @@ class Player extends MediaProxy {
   }
 
   /**
+   * @param {import('./instManager').InstManager} value
+   */
+  static set instManager (value) {
+    instManager = value
+  }
+
+  /**
+   * @param {import('./instManager').InstManager} value
+   */
+  static get instManager () {
+    return instManager
+  }
+
+  /**
    * 获取当前处理激活态的实例id
    * @returns { number | string | null }
+   * @deprecated 该方法转移到 InstManager 上去使用: player.instManager.getActiveId()
    */
   static getCurrentUserActivePlayerId () {
-    return pluginsManager.getCurrentUseActiveId()
+    return instManager?.getActiveId()
   }
 
   /**
    * 设置实例的用户行为激活状态
    * @param { number | string } playerId
    * @param { boolean } isActive
+   * @deprecated 该方法转移到 InstManager 上去使用: player.instManager.setActive()
    */
   static setCurrentUserActive (playerId, isActive) {
-    pluginsManager.setCurrentUserActive(playerId, isActive)
+    instManager?.setActive(playerId, isActive)
   }
 
   /**
@@ -105,9 +132,23 @@ class Player extends MediaProxy {
     this.waitTimer = null
 
     /**
+     * @public
+     * @description This switch provides the playback plugin with the ability
+     *  to handle media source by itself.
+     */
+    this.handleSource = true
+
+    /**
      * @private
      */
     this._state = STATES.INITIAL
+
+    /**
+     * @public
+     * @readonly
+     * @type { boolean }
+     */
+    this.isAd = false
 
     /**
      * @public
@@ -137,6 +178,13 @@ class Player extends MediaProxy {
      * @readonly
      */
     this._useAutoplay = false
+    /**
+     * @description 记录起播需要seek的时间点
+     * @type { number }
+     * @private
+     * @readonly
+     */
+    this.__startTime = -1
     /**
      *  @type { number }
      */
@@ -182,8 +230,8 @@ class Player extends MediaProxy {
     this._cssfullscreenEl = null
 
     /**
-     * @type { IDefinition | null }
-     * @readonly
+     * @type { ?IDefinition }
+     * @public
      */
     this.curDefinition = null
     /**
@@ -252,7 +300,7 @@ class Player extends MediaProxy {
     this.innerContainer = null
 
     /**
-     * @type { null | Object }
+     * @type { ?Controls }
      * @readonly
      * @description 控制栏插件
      */
@@ -320,6 +368,10 @@ class Player extends MediaProxy {
       isActiveLocked: false
     }
 
+    /**
+     * @type {InstManager}
+     */
+    this.instManager = instManager
     const rootInit = this._initDOM()
     if (!rootInit) {
       console.error(
@@ -390,7 +442,7 @@ class Player extends MediaProxy {
         return false
       }
     }
-    const ret = pluginsManager.checkPlayerRoot(this.root)
+    const ret = checkPlayerRoot(this.root)
     if (ret) {
       XG_DEBUG.logWarn(
         'The is an Player instance already exists in this.root, destroy it and reinitialize'
@@ -398,19 +450,12 @@ class Player extends MediaProxy {
       ret.destroy()
     }
     this.root.setAttribute(PLATER_ID, this.playerId)
+    this.media.setAttribute(PLATER_ID, this.playerId)
+
+    instManager?.add(this)
     pluginsManager.init(this)
     this._initBaseDoms()
 
-    // 允许自定义video对象的构造
-    const XgVideoProxy = this.constructor.XgVideoProxy
-    if (XgVideoProxy && this.mediaConfig.mediaType === XgVideoProxy.mediaType) {
-      const el = this.innerContainer || this.root
-      this.detachVideoEvents(this.media)
-      const _nVideo = new XgVideoProxy(el, this.config, this.mediaConfig)
-      this.attachVideoEvents(_nVideo)
-      this.media = _nVideo
-    }
-    this.media.setAttribute(PLATER_ID, this.playerId)
     if (this.config.controls) {
       const _root = this.config.controls.root || null
       const controls = pluginsManager.register(this, Controls, { root: _root })
@@ -537,9 +582,17 @@ class Player extends MediaProxy {
     this.media.removeEventListener('webkitendfullscreen', this._onWebkitendfullscreen)
   }
 
+  _clearUserTimer () {
+    if (!this.userTimer) {
+      return
+    }
+    Util.clearTimeout(this, this.userTimer)
+    this.userTimer = null
+  }
+
   /**
    *
-   * @param { any } url
+   * @param { any } [url]
    * @returns
    */
   _startInit (url) {
@@ -560,13 +613,16 @@ class Player extends MediaProxy {
         return
       }
     }
-    this._detachSourceEvents(this.media)
-    if (Util.typeOf(url) === 'Array' && url.length > 0) {
-      this._attachSourceEvents(this.media, url)
-    } else if (!this.media.src || this.media.src !== url) {
-      this.media.src = url
-    } else if (!url) {
-      this.media.removeAttribute('src')
+
+    if (this.handleSource) {
+      this._detachSourceEvents(this.media)
+      if (Util.typeOf(url) === 'Array' && url.length > 0) {
+        this._attachSourceEvents(this.media, url)
+      } else if (!this.media.src || this.media.src !== url) {
+        this.media.src = url
+      } else if (!url) {
+        this.media.removeAttribute('src')
+      }
     }
 
     if (Util.typeOf(this.config.volume) === 'Number') {
@@ -586,10 +642,13 @@ class Player extends MediaProxy {
       (Sniffer.os.isIpad || Sniffer.os.isPhone) && this.mediaPlay()
     }
 
-    if (readyState >= 2) {
+    const { startTime } = this.config
+    this.__startTime = startTime > 0 ? startTime : -1
+    this.config.startTime = 0
+    if (readyState >= 2 && this.duration > 0) {
       this.canPlayFunc()
     } else {
-      this.once(Events.CANPLAY, this.canPlayFunc)
+      this.on(Events.CANPLAY, this.canPlayFunc)
     }
     if (!this.hasStart || this.state < STATES.ATTACHED) {
       pluginsManager.afterInit(this)
@@ -734,10 +793,7 @@ class Player extends MediaProxy {
       typeof position === 'string' &&
       position.indexOf('controls') > -1
     ) {
-      return (
-        this.controls &&
-        this.controls.registerPlugin(PLUFGIN, options, PLUFGIN.pluginName)
-      )
+      return this.controls?.registerPlugin(PLUFGIN, options, PLUFGIN.pluginName)
     }
     if (!options.root) {
       options.root = this._getRootByPosition(position)
@@ -871,7 +927,7 @@ class Player extends MediaProxy {
 
   /**
    *
-   * @param { any } url
+   * @param { any } [url]
    * @returns { Promise<void> | void }
    * @description 启动播放器，start一般都是播放器内部隐式调用，主要功能是将video添加到DOM
    */
@@ -911,11 +967,7 @@ class Player extends MediaProxy {
 
   /**
    * @param { string | object } url
-   * @param { boolean | {
-   *    seamless?: boolean,
-   *    currentTime?: number,
-   *    bitrate?: number
-   * } } [options]
+   * @param { SwitchUrlOptions } [options]
    * @returns { Promise | null } 执行结果
    */
   switchURL (url, options) {
@@ -925,6 +977,7 @@ class Player extends MediaProxy {
     }
     _src = this.preProcessUrl(_src).url
     const curTime = this.currentTime
+    this.__startTime = curTime
     const isPaused = this.paused && !this.isError
     this.src = _src
     return new Promise((resolve, reject) => {
@@ -934,7 +987,7 @@ class Player extends MediaProxy {
         reject(e)
       }
       const _canplay = () => {
-        this.currentTime = curTime
+        this._seekToStartTime()
         if (isPaused) {
           this.pause()
         }
@@ -1213,7 +1266,7 @@ class Player extends MediaProxy {
     clsList.forEach((cls) => {
       this.removeClass(cls)
     })
-    this.addClass(STATE_CLASS.ENTER)
+    this.addClass(STATE_CLASS.NO_START)
     this.emit(Events.RESET)
   }
 
@@ -1260,11 +1313,13 @@ class Player extends MediaProxy {
     this.hasStart = false
     this._useAutoplay = false
     root.removeAttribute(PLATER_ID)
+    media.removeAttribute(PLATER_ID)
     this.updateAcc('destroy')
     this._unbindEvents()
     this._detachSourceEvents(this.media)
     Util.clearAllTimers(this)
     this.emit(Events.DESTROY)
+    instManager?.remove(this)
     pluginsManager.destroy(this)
     delHooksDescriptor(this)
     super.destroy()
@@ -1281,7 +1336,7 @@ class Player extends MediaProxy {
     }
     !innerContainer &&
     media instanceof window.Node &&
-      root.contains(media) &&
+      root.contains(media) && !this.config.remainMediaAfterDestroy &&
       root.removeChild(media);
     ['topBar', 'leftBar', 'rightBar', 'innerContainer'].map((item) => {
       this[item] && root.removeChild(this[item])
@@ -1321,7 +1376,6 @@ class Player extends MediaProxy {
           })
         }
       })
-      this.play()
       this.emit(Events.REPLAY)
       this.onPlay()
     })
@@ -1400,6 +1454,9 @@ class Player extends MediaProxy {
    */
   getFullscreen (el = this.config.fullscreenTarget) {
     const { root, media } = this
+    if (el === 'video' || el === 'media') {
+      el = this[el]
+    }
     if (!el) {
       el = root
     }
@@ -1455,7 +1512,7 @@ class Player extends MediaProxy {
       return
     }
     const { root, media } = this
-    if (el) {
+    if (!el) {
       el = root
     }
     this._fullActionFrom = 'exit'
@@ -1631,6 +1688,7 @@ class Player extends MediaProxy {
       this.onBlur(data)
       return
     }
+    this._clearUserTimer()
     this.emit(Events.PLAYER_BLUR, {
       paused: this.paused,
       ended: this.ended,
@@ -1647,18 +1705,12 @@ class Player extends MediaProxy {
     const { innerStates } = this
     this.isActive = true
     this.removeClass(STATE_CLASS.INACTIVE)
-    if (this.userTimer) {
-      Util.clearTimeout(this, this.userTimer)
-      this.userTimer = null
-    }
+    this._clearUserTimer()
     if (data.isLock !== undefined) {
       innerStates.isActiveLocked = data.isLock
     }
     if (data.autoHide === false || data.isLock === true || innerStates.isActiveLocked) {
-      if (this.userTimer) {
-        Util.clearTimeout(this, this.userTimer)
-        this.userTimer = null
-      }
+      this._clearUserTimer()
       return
     }
     const time = data && data.delay ? data.delay : this.config.inactive
@@ -1674,7 +1726,7 @@ class Player extends MediaProxy {
    * @returns
    */
   onBlur ({ ignorePaused = false } = {}) {
-    if (!this.isActive || this.innerStates.isActiveLocked) {
+    if (this.innerStates.isActiveLocked) {
       return
     }
     const { closePauseVideoFocus } = this.config
@@ -1688,13 +1740,10 @@ class Player extends MediaProxy {
     if (!this.config) {
       return
     }
-    const { autoplay, startTime, defaultPlaybackRate } = this.config
+    const { autoplay, defaultPlaybackRate } = this.config
 
-    XG_DEBUG.logInfo('player', 'canPlayFunc, startTime', startTime)
-    if (startTime) {
-      this.currentTime = startTime > this.duration ? this.duration : startTime
-      this.config.startTime = 0 // 仅仅使用一次
-    }
+    XG_DEBUG.logInfo('player', 'canPlayFunc, startTime', this.__startTime)
+    this._seekToStartTime()
 
     // 解决浏览器安装了一些倍速扩展插件的情况下，倍速设置失效问题
     this.playbackRate = defaultPlaybackRate;
@@ -1759,7 +1808,11 @@ class Player extends MediaProxy {
         this._fullScreenOffset = null
       }
       if (!this.cssfullscreen) {
-        this.recoverFullStyle( this.root,this._fullscreenEl, STATE_CLASS.FULLSCREEN)
+        let el = this._fullscreenEl
+        if (!el && (this.root.contains(event.target) || event.target === this.root)) {
+          el = event.target
+        }
+        this.recoverFullStyle( this.root, el, STATE_CLASS.FULLSCREEN)
       } else {
         this.removeClass(STATE_CLASS.FULLSCREEN)
       }
@@ -1796,6 +1849,17 @@ class Player extends MediaProxy {
   onLoadeddata () {
     this.isError = false
     this.isSeeking = false
+    if (this.__startTime > 0) {
+      if (this.duration > 0) {
+        this._seekToStartTime()
+      } else {
+        // 在安卓原生video播放hls时，loadeddata触发时durationchange事件虽然已经触发过了但duration仍然为0，
+        // 需要在下一次durationchange触发时再重新设置起播时间
+        this.once(Events.DURATION_CHANGE, () => {
+          this._seekToStartTime()
+        })
+      }
+    }
   }
 
   onLoadstart () {
@@ -1822,10 +1886,7 @@ class Player extends MediaProxy {
     this.addClass(STATE_CLASS.PAUSED)
     this.updateAcc('pause')
     if (!this.config.closePauseVideoFocus) {
-      if (this.userTimer) {
-        Util.clearTimeout(this, this.userTimer)
-        this.userTimer = null
-      }
+      this._clearUserTimer()
       this.focus()
     }
   }
@@ -1888,6 +1949,7 @@ class Player extends MediaProxy {
     this.updateAcc('waiting')
     this.waitTimer = Util.setTimeout(this, () => {
       this.addClass(STATE_CLASS.LOADING)
+      this.emit(Events.LOADING)
       Util.clearTimeout(this, this.waitTimer)
       this.waitTimer = null
     }, this.config.minWaitDelay)
@@ -1903,6 +1965,9 @@ class Player extends MediaProxy {
     clsList.forEach((cls) => {
       this.removeClass(cls)
     })
+    if (!this._accPlayed.t && !this.paused && !this.ended) {
+      this._accPlayed.t = new Date().getTime()
+    }
   }
 
   /**
@@ -1919,7 +1984,7 @@ class Player extends MediaProxy {
     }
 
     // 兼容safari在调整为静音之后未调用play自动起播问题
-    if (!this.paused && this.state < STATES.RUNNING && this.duration) {
+    if (!this.paused && this.state === STATES.NOTALLOW && this.duration) {
       this.setState(STATES.RUNNING)
       this.emit(Events.AUTOPLAY_STARTED)
     }
@@ -1984,11 +2049,20 @@ class Player extends MediaProxy {
   }
 
   /**
-   *
-   * @param { number } time
+   * 目标时间点是否在buffer内
+   * @param { number } time 时间点
+   * @param options 判断阈值配置，可选的
+   * @param options.startDiff 判断起始阈值，即该时间下距离buffer开始点超过阈值时才算作在buffer内，默认为0
+   * @param options.endDiff 判断结束阈值，即该时间下距离buffer结束点超过阈值时才算作在buffer内，默认为0
    * @returns { boolean }
    */
-  checkBuffer (time) {
+  checkBuffer (
+    time,
+    options = {
+      startDiff: 0,
+      endDiff: 0
+    }) {
+    const { startDiff = 0, endDiff = 0 } = options || {}
     const buffered = this.media.buffered
     if (!buffered || buffered.length === 0 || !this.duration) {
       return true
@@ -1996,7 +2070,7 @@ class Player extends MediaProxy {
     const currentTime = time || this.media.currentTime || 0.2
     const len = buffered.length
     for (let i = 0; i < len; i++) {
-      if (buffered.start(i) <= currentTime && buffered.end(i) > currentTime) {
+      if (buffered.start(i) + startDiff <= currentTime && buffered.end(i) - endDiff > currentTime) {
         return true
       }
     }
@@ -2004,8 +2078,9 @@ class Player extends MediaProxy {
   }
 
   resizePosition () {
-    const { rotate, vy, vx, h, w } = this.videoPos
-    if (rotate < 0 && !vy && !vx) {
+    const { vy, vx, h, w } = this.videoPos
+    let rotate = this.videoPos.rotate
+    if (rotate < 0 && h < 0 && w < 0) {
       return
     }
     let _pi = this.videoPos._pi
@@ -2016,8 +2091,9 @@ class Player extends MediaProxy {
       return
     }
     this.videoPos.pi = _pi
+    rotate = rotate < 0 ? 0 : rotate
     const _pos = {
-      rotate: rotate
+      rotate
     }
     let offsetY = 0
     let offsetX = 0
@@ -2026,8 +2102,10 @@ class Player extends MediaProxy {
     const { root, innerContainer } = this
     const width = root.offsetWidth
     const height = innerContainer ? innerContainer.offsetHeight : root.offsetHeight
+    const styles = {}
     let rHeight = height
     let rWidth = width
+
     if (_t % 2 === 0) {
       scale = h > 0 ? 100 / h : (w > 0 ? 100 / w : 1)
       _pos.scale = scale
@@ -2035,8 +2113,10 @@ class Player extends MediaProxy {
       _pos.y = _t === 2 ? 0 - offsetY : offsetY
       offsetX = vx > 0 ? (100 - w) / 2 - vx : 0
       _pos.x = _t === 2 ? 0 - offsetX : offsetX
-      this.media.style.width = `${rWidth}px`
-      this.media.style.height = `${rHeight}px`
+      styles.width = `${rWidth}px`
+      styles.height = `${rHeight}px`
+      styles.maxWidth = ''
+      styles.maxHeight = ''
     } else if (_t % 2 === 1) {
       rWidth = height
       rHeight = width
@@ -2046,12 +2126,18 @@ class Player extends MediaProxy {
       offsetY = offset / 2 / rHeight * 100
       _pos.y = _t === 3 ? offsetY + vx / 2 : offsetY - vx / 2
       _pos.scale = scale
-      this.media.style.width = `${rWidth}px`
-      this.media.style.height = `${rHeight}px`
+      styles.width = `${rWidth}px`
+      styles.maxWidth = `${rWidth}px`
+      styles.height = `${rHeight}px`
+      styles.maxHeight = `${rHeight}px`
     }
-    const formStyle = Util.getTransformStyle(_pos)
-    this.media.style.transform = formStyle
-    this.media.style.webkitTransform = formStyle
+    const formStyle = Util.getTransformStyle(_pos, this.media.style.transform || this.media.style.webkitTransform)
+    styles.transform = formStyle
+    styles.webkitTransform = formStyle
+
+    Object.keys(styles).map(key => {
+      this.media.style[key] = styles[key]
+    })
   }
 
   /**
@@ -2209,10 +2295,23 @@ class Player extends MediaProxy {
    * @param { IUrl } url
    * @param { {[propName: string]: any} } [ext]
    * @returns { url: IUrl, [propName: string]: any }
+   * @public
    */
   preProcessUrl (url, ext) {
-    const { preProcessUrl } = this.config
-    return !Util.isBlob(url) && preProcessUrl && typeof preProcessUrl === 'function' ? preProcessUrl(url, ext) : { url }
+    const { preProcessUrl, preProcessUrlOptions } = this.config
+    const processUrlOptions = Object.assign({}, preProcessUrlOptions, ext)
+    return !Util.isBlob(url) && typeof preProcessUrl === 'function' ? preProcessUrl(url, processUrlOptions) : { url }
+  }
+
+
+  /**
+   * @description 跳转至配置的起播时间点
+   */
+  _seekToStartTime () {
+    if (this.__startTime > 0 && this.duration > 0) {
+      this.currentTime = this.__startTime > this.duration ? this.duration : this.__startTime
+      this.__startTime = -1
+    }
   }
 
   /**
@@ -2433,7 +2532,7 @@ class Player extends MediaProxy {
 
   /**
    * 累计观看时长
-   * @type number
+   * @type { number }
    */
   get cumulateTime () {
     const { acc, t } = this._accPlayed
@@ -2573,9 +2672,14 @@ class Player extends MediaProxy {
   setUserActive (isActive, isMuted) {
     if (typeof isMuted === 'boolean' && isMuted !== this.muted) {
       this.addInnerOP('volumechange')
-      this.muted = isMuted
+      if (Util.typeOf(isMuted) === Boolean) {
+        /**
+         * @type {boolean}
+         */
+        this.muted = isMuted
+      }
     }
-    pluginsManager.setCurrentUserActive(this.playerId, isActive)
+    instManager?.setActive(this.playerId, isActive)
   }
 
   /**
@@ -2627,6 +2731,9 @@ class Player extends MediaProxy {
    */
   static XgVideoProxy = null;
 }
+
+// use the default instance manager.
+Player.instManager = InstManager.getInstance()
 
 export {
   Player as default,

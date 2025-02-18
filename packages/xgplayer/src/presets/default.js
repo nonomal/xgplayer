@@ -37,6 +37,7 @@ import WaitingTimeoutJump from '../plugins/waitingTimeoutJump'
 import TestSpeed from '../plugins/testspeed'
 import I18N from '../lang/i18n'
 import FpsDetect from '../plugins/fpsDetect'
+// import Heatmap from '../plugins/heatmap'
 
 I18N.use(ZH)
 

@@ -16,6 +16,7 @@ export default class ScreenShot extends IconPlugin {
       format: '.png',
       width: 600,
       height: 337,
+      saveImg: true,
       fitVideo: true,
       disable: false,
       name: 'screenshot'
@@ -51,9 +52,26 @@ export default class ScreenShot extends IconPlugin {
     const saveLink = document.createElement('a')
     saveLink.href = data
     saveLink.download = filename
-    const event = document.createEvent('MouseEvents')
-    event.initMouseEvent('click', true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null)
-    saveLink.dispatchEvent(event)
+
+    let event
+    try {
+      if (typeof MouseEvent !== 'undefined') {
+        event = new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        })
+      } else {
+        event = document.createEvent('MouseEvents')
+        event.initMouseEvent('click', true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null)
+      }
+    } catch (e) {
+      console.error('MouseEvent unsupported', e)
+    }
+
+    if (event) {
+      saveLink.dispatchEvent(event)
+    }
   }
 
   createCanvas (width, height) {
@@ -78,9 +96,12 @@ export default class ScreenShot extends IconPlugin {
     e.preventDefault()
     e.stopPropagation()
     this.emitUserAction(e, 'shot')
-    this.shot().then((data) => {
+    const { config } = this
+    this.shot(config.width, config.height).then((data) => {
       this.emit(Events.SCREEN_SHOT, data)
-      this.saveScreenShot(data, this.config.name + this.config.format)
+      if (config.saveImg) {
+        this.saveScreenShot(data, config.name + config.format)
+      }
     })
   }
 

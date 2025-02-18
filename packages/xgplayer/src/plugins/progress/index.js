@@ -6,7 +6,7 @@ import './index.scss'
  * @typedef {{
  *   position?:string,
  *   disable?: boolean,
- *   isDragingSeek?: boolean, // 是否在拖拽的过程中更新currentTime
+ *   isDraggingSeek?: boolean, // 是否在拖拽的过程中更新currentTime
  *   closeMoveSeek?: boolean, // 是否关闭滑块seek能力
  *   isPauseMoving?: boolean, // 是否在move的时候暂停视频内容
  *   isCloseClickSeek?: boolean, // 是否关闭点击进度条的时候seek
@@ -43,7 +43,7 @@ class Progress extends Plugin {
       position: POSITIONS.CONTROLS_CENTER,
       index: 0,
       disable: false,
-      isDragingSeek: true, // 是否在拖拽的过程中更新currentTime
+      isDraggingSeek: true, // 是否在拖拽的过程中更新currentTime
       closeMoveSeek: false, // 是否关闭滑块seek能力
       isPauseMoving: false, // 是否在move的时候暂停视频内容
       isCloseClickSeek: false, // 是否关闭点击进度条的时候seek
@@ -90,6 +90,12 @@ class Progress extends Plugin {
     }
 
     this._disableBlur = false
+
+    // 兼容旧版本
+    if (typeof this.config.isDragingSeek === 'boolean') {
+      console.warn('[XGPLAYER] \'isDragingSeek\' is deprecated, please use \'isDraggingSeek\' instead')
+      this.config.isDraggingSeek = this.config.isDragingSeek
+    }
   }
 
   get offsetDuration () {
@@ -113,7 +119,11 @@ class Progress extends Plugin {
     this.useable = useable
   }
 
-  show () {
+  /**
+   * @param {string} [value]
+   * @returns
+   */
+  show (value) {
     this.root && (this.root.style.display = 'flex')
   }
   /**
@@ -163,12 +173,22 @@ class Progress extends Plugin {
     const { fragFocusClass, fragAutoFocus, fragClass } = this.config
     this._initInner(this.config.fragments, { fragFocusClass, fragAutoFocus, fragClass, style: this.playerConfig.commonStyle || {} })
     if (Sniffer.device === 'mobile') {
-      this.config.isDragingSeek = false
+      this.config.isDraggingSeek = false
       this.isMobile = true
     }
 
     this.progressBtn = this.find('.xgplayer-progress-btn')
 
+    this.listenEvents()
+    this.bindDomEvents()
+    this.initCustomStyle()
+  }
+
+  /**
+   * This method can be overridden.
+   * Eg. xgplayer-ads/ui/adProgress.js
+   */
+  listenEvents () {
     this.on(Events.DURATION_CHANGE, () => {
       this.onMouseLeave()
     })
@@ -199,9 +219,6 @@ class Progress extends Plugin {
     this.on(Events.VIDEO_RESIZE, () => {
       this.onVideoResize()
     })
-
-    this.bindDomEvents()
-    this.initCustomStyle()
   }
 
   /**
@@ -291,6 +308,7 @@ class Progress extends Plugin {
   unlock () {
     const { player, pos } = this
     pos.isEnter = false
+    pos.isLocked = false
     if (player.isMini) {
       return
     }
@@ -303,17 +321,13 @@ class Progress extends Plugin {
   }
 
   bindDomEvents () {
-    const { controls, config } = this.player
+    const { config } = this.player
     this._mouseDownHandlerHook = this.hook('dragstart', this._mouseDownHandler)
     this._mouseUpHandlerHook = this.hook('dragend', this._mouseUpHandler)
     this._mouseMoveHandlerHook = this.hook('drag', this._mouseMoveHandler)
 
     if (this.domEventType === 'touch' || this.domEventType === 'compatible') {
       this.root.addEventListener('touchstart', this.onMouseDown)
-      if (controls) {
-        controls.root && controls.root.addEventListener('touchmove', Util.stopPropagation)
-        controls.center && controls.center.addEventListener('touchend', Util.stopPropagation)
-      }
     }
 
     if (this.domEventType === 'mouse' || this.domEventType === 'compatible') {
@@ -445,6 +459,7 @@ class Progress extends Plugin {
     if (eventType === 'touchstart') {
       this.root.addEventListener('touchmove', this.onMouseMove)
       this.root.addEventListener('touchend', this.onMouseUp)
+      this.root.addEventListener('touchcancel', this.onMouseUp)
     } else {
       this.unbind('mousemove', this.onMoveOnly)
 
@@ -483,9 +498,10 @@ class Progress extends Plugin {
     _state.prePlayTime = 0
     _state.time = 0
     const eventType = e.type
-    if (eventType === 'touchend') {
+    if (eventType === 'touchend' || eventType === 'touchcancel') {
       this.root.removeEventListener('touchmove', this.onMouseMove)
       this.root.removeEventListener('touchend', this.onMouseUp)
+      this.root.removeEventListener('touchcancel', this.onMouseUp)
       // 交互结束 恢复控制栏的隐藏流程
       this.blur()
     } else {
@@ -500,7 +516,7 @@ class Progress extends Plugin {
     // 延迟复位，状态复位要在dom相关时间回调执行之后
     Util.setTimeout(this, () => {
       this.resetSeekState()
-    }, 10)
+    }, 1)
     // 交互结束 恢复控制栏的隐藏流程
     player.focus()
   }
@@ -565,10 +581,10 @@ class Progress extends Plugin {
 
   /**
    * @description 根据currenTime和占用百分比更新进度条
-   * @param {Number} currentTime 需要更新到的时间
-   * @param {Number} seekTime 实际seek的时间
-   * @param {Number} percent 更新时间占比
-   * @param {Int} type 触发类型 0-down 1-move 2-up
+   * @param {number} currentTime 需要更新到的时间
+   * @param {number} seekTime 实际seek的时间
+   * @param {number} percent 更新时间占比
+   * @param {number} type 触发类型 0-down 1-move 2-up
    */
   updateWidth (currentTime, seekTime, percent, type) {
     const { config, player } = this
@@ -580,7 +596,7 @@ class Progress extends Plugin {
 
     this.updatePercent(percent)
     this.updateTime(currentTime)
-    if (type === 1 && (!config.isDragingSeek || player.config.mediaType === 'audio')) {
+    if (type === 1 && (!config.isDraggingSeek || player.config.mediaType === 'audio')) {
       return
     }
     this._state.now = realTime
@@ -668,7 +684,7 @@ class Progress extends Plugin {
    */
   onTimeupdate (isEnded) {
     const { player, _state, offsetDuration } = this
-    if (player.isSeeking || this.isProgressMoving) {
+    if ((player.isSeeking && player.media.seeking) || this.isProgressMoving || !player.hasStart) {
       return
     }
     if (_state.now > -1) {
@@ -684,8 +700,6 @@ class Progress extends Plugin {
     time = Util.adjustTimeByDuration(time, offsetDuration, isEnded)
     this.innerList.update({ played: time }, offsetDuration)
     this.progressBtn.style.left = `${time / offsetDuration * 100}%`
-    const { miniprogress } = this.player.plugins
-    miniprogress && miniprogress.update({ played: time }, offsetDuration)
   }
 
   /**
@@ -702,19 +716,15 @@ class Progress extends Plugin {
     let _end = player.bufferedPoint.end
     _end = Util.adjustTimeByDuration(_end, duration, isEnded)
     this.innerList.update({ cached: _end }, duration)
-    const { miniprogress } = this.player.plugins
-    miniprogress && miniprogress.update({ cached: _end }, duration)
   }
 
   onReset () {
     this.innerList.update({ played: 0, cached: 0 }, 0)
-    const { miniprogress } = this.player.plugins
-    miniprogress && miniprogress.update({ cached: 0, played: 0 }, 0)
+    this.progressBtn.style.left = '0%'
   }
 
   destroy () {
     const { player } = this
-    const { controls } = player
     this.thumbnailPlugin = null
     this.innerList.destroy()
     this.innerList = null
@@ -723,10 +733,7 @@ class Progress extends Plugin {
       this.root.removeEventListener('touchstart', this.onMouseDown)
       this.root.removeEventListener('touchmove', this.onMouseMove)
       this.root.removeEventListener('touchend', this.onMouseUp)
-      if (controls) {
-        controls.root && controls.root.removeEventListener('touchmove', Util.stopPropagation)
-        controls.center && controls.center.removeEventListener('touchend', Util.stopPropagation)
-      }
+      this.root.removeEventListener('touchcancel', this.onMouseUp)
     }
     if (domEventType === 'mouse' || domEventType === 'compatible') {
       this.unbind('mousedown', this.onMouseDown)

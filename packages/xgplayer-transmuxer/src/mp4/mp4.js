@@ -1,11 +1,15 @@
-import { TrackType, VideoCodecType } from '../model'
-import { concatUint8Array, parse /* hashVal */ } from '../utils'
+import { AudioCodecType, TrackType, VideoCodecType } from '../model'
+import { concatUint8Array, parse } from '../utils'
 import Buffer from './buffer'
-// import Crypto from './crypto/crypto'
+
 const UINT32_MAX = 2 ** 32 - 1
 
 export class MP4 {
   static types = [
+    'Opus',
+    'dOps',
+    'av01',
+    'av1C',
     'avc1',
     'avcC',
     'hvc1',
@@ -341,17 +345,23 @@ export class MP4 {
 
   static stsd (track) {
     let content
+
     if (track.type === 'audio') {
       if (track.useEME && track.enca) {
         content = MP4.enca(track)
         // console.log('[remux],enca, len,', content.byteLength, track.type, hashVal(content.toString()))
       } else {
-        content = MP4.mp4a(track)
-        // console.log('[remux],mp4a, len,', content.byteLength, track.type, hashVal(content.toString()))
+        if (track.codecType === AudioCodecType.OPUS) {
+          content = MP4.opus(track)
+        } else {
+          content = MP4.mp4a(track)
+        }
       }
     } else if (track.useEME && track.encv) {
       content = MP4.encv(track)
       // console.log('[remux],encv, len,', content.byteLength, track.type, hashVal(content.toString()))
+    } else if (track.av1C) {
+      content = MP4.av01(track)
     } else {
       content = MP4.avc1hev1(track)
       // console.log('[remux],avc1hev1, len,', content.byteLength, track.type, hashVal(content.toString()))
@@ -492,7 +502,31 @@ export class MP4 {
     const schi = MP4.schi(data)
     return MP4.box(MP4.types.sinf, content, MP4.box(MP4.types.frma, frma), MP4.box(MP4.types.schm, schm), schi)
   }
-
+  static av01 (track) {
+    return MP4.box(MP4.types.av01, new Uint8Array([
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // reserved
+      0x00, 0x01, // data_reference_index
+      0x00, 0x00, // pre_defined
+      0x00, 0x00, // reserved
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // pre_defined
+      (track.width >> 8) & 0xff, track.width & 0xff, // width
+      (track.height >> 8) & 0xff, track.height & 0xff, // height
+      0x00, 0x48, 0x00, 0x00, // horizresolution
+      0x00, 0x48, 0x00, 0x00, // vertresolution
+      0x00, 0x00, 0x00, 0x00, // reserved
+      0x00, 0x01, // frame_count
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, // compressor name
+      0x00, 0x18, // depth
+      0x11, 0x11 // pre_defined = -1 //todo
+    ]), track.av1C, track.colr)
+  }
   static avc1hev1 (track) {
     const isHevc = track.codecType === VideoCodecType.HEVC
     const typ = isHevc ? MP4.types.hvc1 : MP4.types.avc1
@@ -687,6 +721,62 @@ export class MP4 {
     ))
     // console.log('[remux],esds ,len ', esds.byteLength, hashVal(esds.toString()))
     return esds
+  }
+
+  /**
+   * https://opus-codec.org/docs/opus_in_isobmff.html
+   */
+  static opus (track) {
+    const opusAudioDescription = new Uint8Array([
+      0x00, 0x00, 0x00, // version
+      0x00, 0x00, 0x00, // reserved
+      0x00, 0x01, // data_reference_index
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // reserved
+      track.channelCount,
+      0x00, 0x10, // sampleSize
+      0x00, 0x00, // pre_defined
+      0x00, 0x00, // reserved
+      (track.sampleRate >> 8) & 0xff,
+      track.sampleRate & 0xff, // sampleRate
+      0x00, 0x00
+    ])
+
+    const opusSpecificConfig = track.config.length ? MP4.dOps(track) : []
+    return MP4.box(MP4.types.Opus, opusAudioDescription, opusSpecificConfig)
+  }
+
+  static dOps (track) {
+    if (track.config) {
+      track.config[4] = (track.sampleRate >>> 24) & 0xFF
+      track.config[5] = (track.sampleRate >>> 16) & 0xFF
+      track.config[6] = (track.sampleRate >>> 8) & 0xFF
+      track.config[7] = (track.sampleRate) & 0xFF
+
+      return MP4.box(MP4.types.dOps, track.config)
+    }
+
+    // const {channelCount, channelConfigCode, sampleRate } = track
+
+    // const mapping = channelConfigCode?.map((c) => {
+    //   return [
+    //     (c >>> 4) & 0xFF, // Channel mapping family
+    //     c & 0xFF // Channel mapping index
+    //   ]
+    // }).flat() || []
+
+    // const data = new Uint8Array([
+    //   0x00, // version
+    //   channelCount, // channelCount
+    //   0x00, 0x00, // preSkip
+    //   (sampleRate >>> 24) & 0xFF,
+    //   (sampleRate >>> 17) & 0xFF,
+    //   (sampleRate >>> 8) & 0xFF,
+    //   (sampleRate >>> 0) & 0xFF,
+    //   0x00, 0x00, // Global Gain
+    //   ... mapping
+    // ])
+
+    // return data
   }
 
   static mvex (tracks) {

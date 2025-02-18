@@ -1,7 +1,30 @@
 import { readBig32 } from '../utils'
 
 export class NALu {
+  /**
+   * @param {Uint8Array} data
+   * @returns {Uint8Array[]}
+   */
   static parseAnnexB (data) {
+    let j = data.byteLength - 1
+    let dropZerosLength = 0
+    // Collect tailing zeros.
+    // end with 0x000000 and more...
+    do {
+      if (data[j] === 0x00) {
+        dropZerosLength++
+      } else {
+        break
+      }
+
+      j--
+    } while (j > 0)
+
+    if (dropZerosLength >= 3) {
+      // drop tailing zeros.
+      data = data.subarray(0, j + 1)
+    }
+
     const len = data.length
     let start = 2
     let end = 0
@@ -22,6 +45,9 @@ export class NALu {
             end += 2
             break
           } else if (data[end - 2] !== 0) {
+            end++
+            break
+          } else if (end < len - 1 && data[end + 1] !== 1) {
             end++
             break
           }
@@ -106,7 +132,7 @@ export class NALu {
     }
 
     return {
-      payload: unit.subarray(i), type, size, uuid
+      payload: unit.subarray(i, i + size), type, size, uuid
     }
   }
 

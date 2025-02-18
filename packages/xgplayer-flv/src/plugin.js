@@ -1,6 +1,6 @@
 import { BasePlugin, Events, Errors } from 'xgplayer'
 import { EVENT } from 'xgplayer-streaming-shared'
-import { Flv } from './flv'
+import { Flv, logger } from './flv'
 import PluginExtension from './plugin-extension'
 
 export class FlvPlugin extends BasePlugin {
@@ -10,11 +10,14 @@ export class FlvPlugin extends BasePlugin {
     return 'flv'
   }
 
+  logger = logger
+
   /** @type {Flv} */
   flv = null;
 
   /** @type {PluginExtension} */
   pluginExtension = null
+
 
   /** @type {Flv} */
   get core () {
@@ -29,15 +32,20 @@ export class FlvPlugin extends BasePlugin {
   /** @type {boolean} */
   get softDecode () {
     const mediaType = this.player?.config?.mediaType
-    return !!mediaType && mediaType !== 'video' && mediaType !== 'audio'
+    return !!mediaType && mediaType !== 'video' && mediaType !== 'audio' && mediaType !== 'offscreen-video'
   }
 
   get loader () {
     return this.flv?.loader
   }
 
+  get transferCost () {
+    return this.flv._transferCost.transferCost
+  }
+
   beforePlayerInit () {
     const config = this.player.config
+    const mediaElem = this.player.media || this.player.video
 
     if (!config.url) return
 
@@ -53,15 +61,17 @@ export class FlvPlugin extends BasePlugin {
     this.flv = new Flv({
       softDecode: this.softDecode,
       isLive: config.isLive,
-      media: this.player.video,
-      preProcessUrl: (url, ext) => this.player.preProcessUrl?.(url, ext) || {url, ext},
+      media: mediaElem,
+      preProcessUrl: (url, ext) => this.player?.preProcessUrl?.(url, ext) || {url, ext},
       ...flvOpts
     })
 
     if (!this.softDecode) {
       BasePlugin.defineGetterOrSetter(this.player, {
         url: {
-          get: () => this.flv?.media?.src,
+          get: () => {
+            return this.flv?.blobUrl
+          },
           configurable: true
         }
       })
@@ -70,6 +80,7 @@ export class FlvPlugin extends BasePlugin {
     if (this.softDecode) {
       this.pluginExtension = new PluginExtension({
         media: this.player.video,
+        isLive: config.isLive,
         ...config.flv
       }, this)
       this.player.forceDegradeToVideo = (...args) => this.pluginExtension?.forceDegradeToVideo(...args)
@@ -90,9 +101,11 @@ export class FlvPlugin extends BasePlugin {
     this._transCoreEvent(EVENT.LOAD_RETRY)
     this._transCoreEvent(EVENT.SOURCEBUFFER_CREATED)
     this._transCoreEvent(EVENT.ANALYZE_DURATION_EXCEEDED)
+    this._transCoreEvent(EVENT.APPEND_BUFFER)
     this._transCoreEvent(EVENT.REMOVE_BUFFER)
     this._transCoreEvent(EVENT.BUFFEREOS)
     this._transCoreEvent(EVENT.KEYFRAME)
+    this._transCoreEvent(EVENT.CHASEFRAME)
     this._transCoreEvent(EVENT.METADATA_PARSED)
     this._transCoreEvent(EVENT.SEI)
     this._transCoreEvent(EVENT.SEI_IN_TIME)
@@ -131,14 +144,23 @@ export class FlvPlugin extends BasePlugin {
     return Flv.isSupported(mediaType, codec)
   }
 
+  static isSupportedMMS () {
+    return typeof ManagedMediaSource !== 'undefined'
+  }
+
   /**
    *
    * @param {string} url
-   * @param {boolean} seamless
+   * @param {boolean | {seamless: boolean}} seamless
    */
   _onSwitchURL = (url, seamless) => {
     if (this.flv) {
       this.player.config.url = url
+
+      if (typeof seamless === 'object') {
+        seamless = seamless.seamless
+      }
+
       this.flv.switchURL(url, seamless)
 
       if (!seamless && this.player.config?.flv?.keepStatusAfterSwitch) {

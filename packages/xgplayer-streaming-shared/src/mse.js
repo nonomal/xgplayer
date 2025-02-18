@@ -1,17 +1,40 @@
 /* eslint-disable no-undef */
-import { createPublicPromise, nowTime } from './utils'
 import { Buffer } from './buffer'
-import { StreamingError, ERR } from './error'
 import { isBrowser } from './env'
+import { ERR, StreamingError } from './error'
 import { Logger } from './logger'
+import { createPublicPromise, nowTime, SafeJSON } from './utils'
 
-function getMediaSource () {
+function getMediaSource (preferMMS = true) {
   try {
-    return isBrowser ? window.MediaSource : null
+    if (!isBrowser) return null
+
+    if (preferMMS && typeof ManagedMediaSource !== 'undefined') return ManagedMediaSource
+
+    return window.MediaSource
   } catch (e) {}
 }
 
-const MediaSource = getMediaSource()
+function isMMS (mediaSource) {
+  return /ManagedMediaSource/gi.test(Object.prototype.toString.call(mediaSource))
+}
+
+/**
+ * @param {TimeRanges} buffered
+ */
+function getTimeRanges (buffered) {
+  const ranges = []
+
+  if (buffered instanceof TimeRanges) {
+    for (let i = 0; i < buffered.length; i++) {
+      ranges.push({
+        start: buffered.start(i),
+        end: buffered.end(i)
+      })
+    }
+  }
+  return ranges
+}
 
 /** @enum {string} */
 export const MSEErrorType = {
@@ -37,6 +60,30 @@ export class MSEError extends Error {
 }
 
 export class MSE {
+  static VIDEO = 'video'
+
+  static AUDIO = 'audio'
+
+  /**
+   * @param {string} [mime='video/mp4; codecs="avc1.42E01E,mp4a.40.2"']
+   * @param { boolean} preferMMS
+   * @returns {boolean}
+   */
+  static isSupported (mime = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"') {
+    const MediaSource = getMediaSource()
+    if (!MediaSource) return false
+    try {
+      return MediaSource.isTypeSupported(mime)
+    } catch (error) {
+      this._logger.error(mime, error)
+      return false
+    }
+  }
+
+  static isMMSOnly () {
+    return typeof ManagedMediaSource !== 'undefined' && typeof MediaSource === 'undefined'
+  }
+
   /** @type { HTMLMediaElement | null } */
   media = null
 
@@ -48,10 +95,6 @@ export class MSE {
   _queue = Object.create(null)
 
   _sourceBuffer = Object.create(null)
-
-  static VIDEO = 'video'
-
-  static AUDIO = 'audio'
 
   _mseFullFlag = {}
 
@@ -67,7 +110,8 @@ export class MSE {
 
   static getDefaultConfig () {
     return {
-      openLog: false
+      openLog: false,
+      preferMMS: false
     }
   }
 
@@ -87,6 +131,17 @@ export class MSE {
     return this.mediaSource?.readyState === 'open'
   }
 
+  get hasOpTasks () {
+    let flag = false
+    Object.keys(this._queue).forEach(k => {
+      const queue = this._queue[k]
+      if (Array.isArray(queue)) {
+        flag ||= queue.length > 0
+      }
+    })
+    return flag
+  }
+
   get url () {
     return this._url
   }
@@ -97,6 +152,10 @@ export class MSE {
 
   get isEnded () {
     return this.mediaSource ? this.mediaSource.readyState === 'ended' : false
+  }
+
+  get streaming () {
+    return isMMS(this.mediaSource) ? this.mediaSource.streaming : true
   }
 
   isFull (type) {
@@ -126,12 +185,12 @@ export class MSE {
 
     return this._enqueueBlockingOp(() => {
       if (this.isEnded) {
-        this._logger.debug('[debug mse] setDuration ended')
+        this._logger.debug('setDuration but ended')
         return
       }
       if (this.mediaSource) {
         this.mediaSource.duration = duration
-        this._logger.debug('[debug mse] setDuration')
+        this._logger.debug('setDuration', duration)
       }
     }, OP_NAME.UPDATE_DURATION, {isReduceDuration})
   }
@@ -141,10 +200,10 @@ export class MSE {
     if (this._openPromise.used && !this.isOpened && this.mediaSource) {
       const ms = this.mediaSource
       const onOpen = () => {
-        const costtime = nowTime() - this._st
-        this._logger.debug('MSE OPEN', costtime)
+        const costTime = nowTime() - this._st
+        this._logger.debug('sourceopen', costTime)
         ms.removeEventListener('sourceopen', onOpen)
-        this._openPromise.resolve({costtime})
+        this._openPromise.resolve({costtime: costTime})
       }
       ms.addEventListener('sourceopen', onOpen)
       this._openPromise = createPublicPromise()
@@ -154,26 +213,51 @@ export class MSE {
   }
 
   /**
+   * @private
+   */
+  _onStartStreaming = () => {
+    this._logger.debug('startstreaming')
+  }
+
+  /**
+   * @private
+   */
+  _onEndStreaming = () => {
+    this._logger.debug('endstreaming')
+  }
+
+  /**
    * @param { HTMLMediaElement } media
    * @return { Promise }
    */
   async bindMedia (media) {
     if (this.mediaSource || this.media) await this.unbindMedia()
+
+    const MediaSource = getMediaSource(this._config.preferMMS)
+
     if (!media || !MediaSource) throw new Error('Param media or MediaSource does not exist')
     this.media = media
     const ms = this.mediaSource = new MediaSource()
+    const useMMS = isMMS(ms)
     this._st = nowTime()
 
     const onOpen = () => {
-      const costtime = nowTime() - this._st
-      this._logger.debug('MSE OPEN')
+      const costTime = nowTime() - this._st
+      this._logger.debug('sourceopen')
       ms.removeEventListener('sourceopen', onOpen)
       URL.revokeObjectURL(media.src)
-      this._openPromise.resolve({costtime})
+      this._openPromise.resolve({costtime: costTime})
     }
     ms.addEventListener('sourceopen', onOpen)
+    if (useMMS) {
+      ms.addEventListener('startstreaming', this._onStartStreaming)
+      ms.addEventListener('endstreaming', this._onEndStreaming)
+    }
+
     this._url = URL.createObjectURL(ms)
     media.src = this._url
+    media.disableRemotePlayback = useMMS
+
     return this._openPromise
   }
 
@@ -208,9 +292,15 @@ export class MSE {
           // ignore
         }
       })
+
+      if (isMMS(ms)) {
+        ms.removeEventListener('startstreaming', this._onStartStreaming)
+        ms.removeEventListener('endstreaming', this._onEndStreaming)
+      }
     }
 
     if (this.media) {
+      this.media.disableRemotePlayback = false
       this.media.removeAttribute('src')
       try {
         this.media.load()
@@ -252,10 +342,23 @@ export class MSE {
     const sb = this._sourceBuffer[type]
     if (!this.mediaSource || !sb || sb.mimeType === mimeType) return Promise.resolve()
 
-    if (typeof sb.changeType !== 'function') return Promise.reject()
+    if (typeof sb.changeType !== 'function') {
+      return Promise.reject(
+        new StreamingError(
+          ERR.MEDIA,
+          ERR.SUB_TYPES.MSE_CHANGE_TYPE,
+          new Error('changeType is not a function')
+        )
+      )
+    }
 
     return this._enqueueOp(type, () => {
-      sb.changeType(mimeType)
+      try {
+        sb.changeType(mimeType)
+      } catch (e) {
+        throw new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_CHANGE_TYPE, e)
+      }
+
       sb.mimeType = mimeType
       this._onSBUpdateEnd(type)
     }, 'changeType', {mimeType})
@@ -320,12 +423,7 @@ export class MSE {
   clearBuffer (startTime, endTime) {
     let p
     Object.keys(this._sourceBuffer).forEach(k => {
-      p = this._enqueueOp(k, () => {
-        if (!this.mediaSource || this.media.error) return
-        const sb = this._sourceBuffer[k]
-        this._logger.debug('MSE clearBuffer START', k, startTime, endTime)
-        sb.remove(startTime, endTime)
-      }, OP_NAME.REMOVE)
+      p = this.remove(k, startTime, endTime)
     })
     return p || Promise.resolve()
   }
@@ -333,12 +431,8 @@ export class MSE {
   clearAllBuffer () {
     let p
     Object.keys(this._sourceBuffer).forEach(k => {
-      p = this._enqueueOp(k, () => {
-        if (!this.mediaSource || this.media.error) return
-        const sb = this._sourceBuffer[k]
-        this._logger.debug('MSE clearAllBuffer START', k)
-        sb.remove(0, Buffer.end(Buffer.get(sb)))
-      })
+      const sb = this._sourceBuffer[k]
+      p = this.remove(k, 0, Buffer.end(Buffer.get(sb)))
     })
     return p
   }
@@ -351,14 +445,14 @@ export class MSE {
       return
     }
     if (!queue || !queue[type] || queue.length < 5) return
-    const initOpque = []
+    const initQueue = []
     queue.forEach(op => {
       if (op.context && op.context.isinit) {
-        initOpque.push(op)
+        initQueue.push(op)
       }
     })
     this._queue[type] = queue.slice(0, 2)
-    initOpque.length > 0 && this._queue[type].push(...initOpque)
+    initQueue.length > 0 && this._queue[type].push(...initQueue)
   }
 
   /**
@@ -496,11 +590,18 @@ export class MSE {
         } catch (error) {
           if (error && error.message && error.message.indexOf('SourceBuffer is full') >= 0) {
             this._mseFullFlag[type] = true
+            if (op.context && typeof op.context === 'object'){
+              op.context.isFull = true
+            }
             this._logger.error('[MSE error],  context,', op.context, ' ,name,', op.opName, ',err,SourceBuffer is full')
-            op.promise.reject(new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_FULL, error))
+            op?.promise?.reject(new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_FULL, error))
           } else {
             this._logger.error(error)
-            op.promise.reject(new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_OTHER, error))
+            op?.promise?.reject(
+              error.constructor === StreamingError
+                ? error
+                : new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_OTHER, error)
+            )
             queue.shift()
             this._startQueue(type)
           }
@@ -518,8 +619,12 @@ export class MSE {
       }
       if (op) {
         const costtime = nowTime() - this._opst
-        this._logger.debug('UpdateEnd', op.opName, costtime, op.context)
+        this._logger.debug(`UpdateEnd(${type}/${op.opName})`, SafeJSON.stringify(getTimeRanges(this._sourceBuffer[type]?.buffered)), costtime, op.context)
         op.promise.resolve({name: op.opName, context: op.context, costtime})
+        const callback = op.context?.callback
+        if (callback && typeof callback === 'function'){
+          callback(op.context)
+        }
         this._startQueue(type)
       }
     }
@@ -534,20 +639,6 @@ export class MSE {
         op.promise.reject(new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_APPEND_BUFFER, event))
         // Do not shift from queue, 'updateend' event will fire next
       }
-    }
-  }
-
-  /**
-   * @param {string} [mime='video/mp4; codecs="avc1.42E01E,mp4a.40.2"']
-   * @returns {boolean}
-   */
-  static isSupported (mime = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"') {
-    if (!MediaSource) return false
-    try {
-      return MediaSource.isTypeSupported(mime)
-    } catch (error) {
-      this._logger.error(mime, error)
-      return false
     }
   }
 
